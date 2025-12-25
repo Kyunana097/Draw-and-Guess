@@ -14,6 +14,7 @@ from typing import Any, Callable, Dict, List, Optional
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 import pygame
+import json
 
 from src.shared.constants import WINDOW_HEIGHT, WINDOW_TITLE, WINDOW_WIDTH
 from src.client.ui.button import Button
@@ -43,6 +44,7 @@ BUTTON_ANIMS: Dict[int, Dict[str, Any]] = {}
 # Assets and logo path (adjust if you keep logo elsewhere)
 ASSETS_DIR = Path(__file__).parent.parent.parent / "assets"
 LOGO_PATH = ASSETS_DIR / "images" / "logo.png"
+SETTINGS_PATH = Path(__file__).parent.parent.parent / "data" / "settings.json"
 
 # Logo animation parameters
 LOGO_BREATH_AMPLITUDE = 0.06  # 6% size variation
@@ -65,6 +67,30 @@ APP_STATE: Dict[str, Any] = {
         "theme": "light",  # light | dark
     },
 }
+
+
+def load_settings() -> None:
+    """从 JSON 文件加载设置（如果存在）。"""
+    try:
+        if SETTINGS_PATH.exists():
+            with open(SETTINGS_PATH, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                for k in ("player_name", "difficulty", "volume", "theme"):
+                    if k in data:
+                        APP_STATE["settings"][k] = data[k]
+    except Exception as exc:
+        logger.warning("加载设置失败: %s", exc)
+
+
+def save_settings() -> None:
+    """将当前设置保存到 JSON 文件。"""
+    try:
+        SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with open(SETTINGS_PATH, "w", encoding="utf-8") as f:
+            json.dump(APP_STATE["settings"], f, ensure_ascii=False, indent=2)
+    except Exception as exc:
+        logger.warning("保存设置失败: %s", exc)
 
 
 
@@ -253,7 +279,8 @@ def build_play_ui(screen_size: tuple) -> Dict[str, Any]:
     )
     toolbar_rect = pygame.Rect(canvas_rect.right + pad, pad + topbar_h, sidebar_w, canvas_rect.height)
     chat_rect = pygame.Rect(pad, canvas_rect.bottom + pad, sw - pad * 2, chat_h)
-    input_rect = pygame.Rect(pad, chat_rect.bottom + pad, sw - pad * 2, input_h)
+    send_w = 90
+    input_rect = pygame.Rect(pad, chat_rect.bottom + pad, sw - pad * 3 - send_w, input_h)
 
     # 组件
     canvas = Canvas(canvas_rect)
@@ -263,7 +290,19 @@ def build_play_ui(screen_size: tuple) -> Dict[str, Any]:
 
     toolbar = Toolbar(toolbar_rect, colors=BRUSH_COLORS, sizes=BRUSH_SIZES, font_name="Microsoft YaHei")
     chat = ChatPanel(chat_rect, font_size=18, font_name="Microsoft YaHei")
-    text_input = TextInput(input_rect, font_name="Microsoft YaHei", font_size=22, placeholder="输入猜词或聊天... 回车发送")
+    text_input = TextInput(input_rect, font_name="Microsoft YaHei", font_size=22, placeholder="输入猜词或聊天... Enter发送 / Shift+Enter换行")
+    # 发送按钮
+    send_btn = Button(
+        x=input_rect.right + pad,
+        y=input_rect.y,
+        width=send_w,
+        height=input_h,
+        text="发送",
+        bg_color=(60, 140, 250),
+        fg_color=(255, 255, 255),
+        font_size=20,
+        font_name="Microsoft YaHei",
+    )
 
     # 回调绑定
     toolbar.on_color = canvas.set_color
@@ -279,7 +318,8 @@ def build_play_ui(screen_size: tuple) -> Dict[str, Any]:
         pass
 
     def _on_submit(msg: str) -> None:
-        chat.add_message("你", msg)
+        safe = msg.replace("\n", " ")
+        chat.add_message("你", safe)
 
     text_input.on_submit = _on_submit
 
@@ -324,6 +364,7 @@ def build_play_ui(screen_size: tuple) -> Dict[str, Any]:
         "toolbar": toolbar,
         "chat": chat,
         "input": text_input,
+        "send_btn": send_btn,
         "back_btn": back_btn,
         "hud": hud_state,
     }
@@ -355,6 +396,15 @@ def build_settings_ui(screen_size: tuple) -> Dict[str, Any]:
         font_size=20,
         placeholder=APP_STATE["settings"]["player_name"],
     )
+    # 初始填充为当前玩家名并绑定提交保存
+    try:
+        player_name_input.text = APP_STATE["settings"].get("player_name", "玩家")
+    except Exception:
+        pass
+    def _update_player_name(name: str) -> None:
+        APP_STATE["settings"]["player_name"] = name.strip() or APP_STATE["settings"].get("player_name", "玩家")
+        save_settings()
+    player_name_input.on_submit = _update_player_name
     
     # 难度选择按钮
     easy_btn = Button(
@@ -498,6 +548,8 @@ def main() -> None:
 
     try:
         pygame.init()
+        # 加载持久化设置
+        load_settings()
 
         # Create a resizable window and load resources using actual screen size
         screen = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT), pygame.RESIZABLE)
@@ -563,6 +615,14 @@ def main() -> None:
                             ui["input"].handle_event(event)
                             # 返回菜单按钮
                             if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                                # 发送按钮点击：提交输入内容
+                                if ui.get("send_btn") and ui["send_btn"].is_clicked(event.pos, event.button):
+                                    txt = ui["input"].text.strip()
+                                    if txt:
+                                        cb = ui["input"].on_submit
+                                        if cb:
+                                            cb(txt)
+                                        ui["input"].text = ""
                                 if ui["back_btn"].is_clicked(event.pos, event.button):
                                     APP_STATE["screen"] = "menu"
                                     APP_STATE["ui"] = None  # 清除 UI
@@ -631,21 +691,27 @@ def main() -> None:
                             # 难度选择
                             elif ui["easy_btn"].is_clicked(mouse_pos, event.button):
                                 APP_STATE["settings"]["difficulty"] = "简单"
+                                save_settings()
                             elif ui["normal_btn"].is_clicked(mouse_pos, event.button):
                                 APP_STATE["settings"]["difficulty"] = "普通"
+                                save_settings()
                             elif ui["hard_btn"].is_clicked(mouse_pos, event.button):
                                 APP_STATE["settings"]["difficulty"] = "困难"
+                                save_settings()
                             # 主题切换
                             elif ui["light_btn"].is_clicked(mouse_pos, event.button):
                                 APP_STATE["settings"]["theme"] = "light"
+                                save_settings()
                             elif ui["dark_btn"].is_clicked(mouse_pos, event.button):
                                 APP_STATE["settings"]["theme"] = "dark"
+                                save_settings()
                         # 音量滑块拖动
                         elif event.type == pygame.MOUSEMOTION and pygame.mouse.get_pressed()[0]:
                             if ui["volume_slider_rect"].collidepoint(event.pos):
                                 rel_x = event.pos[0] - ui["volume_slider_rect"].x
                                 vol = max(0, min(100, int(rel_x / ui["volume_slider_rect"].width * 100)))
                                 APP_STATE["settings"]["volume"] = vol
+                                save_settings()
 
             screen.fill((245, 248, 255))  # 淡蓝白色背景，更柔和
 
@@ -706,6 +772,7 @@ def main() -> None:
                 ui["toolbar"].draw(screen)
                 ui["chat"].draw(screen)
                 ui["input"].draw(screen)
+                ui["send_btn"].draw(screen)
                 ui["back_btn"].draw(screen)
             elif APP_STATE["screen"] == "settings":
                 ui = APP_STATE["ui"]
