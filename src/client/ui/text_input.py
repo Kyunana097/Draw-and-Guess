@@ -90,16 +90,20 @@ class TextInput:
         """每帧渲染输入框到屏幕
         
         - 绘制背景矩形
-        - 绘制边框
+        - 绘制边框（激活时高亮）
         - 显示输入文本或占位符
         
         Args:
             screen: pygame 屏幕 Surface 对象
         """
-        # 绘制背景矩形
-        pygame.draw.rect(screen, self.bg_color, self.rect)
-        # 绘制边框（2像素宽的灰色线）
-        pygame.draw.rect(screen, (180, 180, 180), self.rect, 2)
+        # 阴影
+        shadow = pygame.Rect(self.rect.x + 3, self.rect.y + 3, self.rect.width, self.rect.height)
+        pygame.draw.rect(screen, (200, 200, 200), shadow, border_radius=6)
+        # 绘制背景矩形（圆角）
+        pygame.draw.rect(screen, self.bg_color, self.rect, border_radius=6)
+        # 绘制边框（激活时蓝色高亮）
+        border_color = (80, 120, 200) if self.active else (180, 180, 180)
+        pygame.draw.rect(screen, border_color, self.rect, 2, border_radius=6)
         
         # 决定显示的文本：若有输入或激活则显示输入内容，否则显示占位符
         txt = self.text if (self.text or self.active) else self.placeholder

@@ -270,6 +270,13 @@ def build_play_ui(screen_size: tuple) -> Dict[str, Any]:
     toolbar.on_mode = canvas.set_mode
     toolbar.on_clear = canvas.clear
 
+    # 初始化工具栏选中状态为画布当前值
+    try:
+        toolbar.set_selected_color(canvas.brush_color)
+        toolbar.set_selected_size(canvas.brush_size)
+    except Exception:
+        pass
+
     def _on_submit(msg: str) -> None:
         chat.add_message("你", msg)
 
@@ -551,15 +558,19 @@ def main() -> None:
                                 sizes = sorted(BRUSH_SIZES)
                                 smaller = max(s for s in sizes if s < cur) if any(s < cur for s in sizes) else cur
                                 ui["canvas"].set_brush_size(smaller)
+                                ui["toolbar"].set_selected_size(smaller)
                             elif event.key in (pygame.K_RIGHTBRACKET,):  # ]
                                 cur = ui["canvas"].brush_size
                                 sizes = sorted(BRUSH_SIZES)
                                 larger = min(s for s in sizes if s > cur) if any(s > cur for s in sizes) else cur
                                 ui["canvas"].set_brush_size(larger)
+                                ui["toolbar"].set_selected_size(larger)
                             elif pygame.K_1 <= event.key <= pygame.K_9:
                                 idx = event.key - pygame.K_1
                                 if 0 <= idx < len(BRUSH_COLORS):
-                                    ui["canvas"].set_color(BRUSH_COLORS[idx])
+                                    chosen = BRUSH_COLORS[idx]
+                                    ui["canvas"].set_color(chosen)
+                                    ui["toolbar"].set_selected_color(chosen)
                             elif event.key in (pygame.K_n,):
                                 # 下一回合：重置计时与换词
                                 hud = ui.get("hud")

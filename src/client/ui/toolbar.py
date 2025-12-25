@@ -32,6 +32,31 @@ class Toolbar:
         except Exception:
             self.font = pygame.font.SysFont(None, 18)
         self._current_mode = "draw"
+        # 当前选中的颜色和笔刷索引（用于高亮显示）
+        self.selected_color_index: int | None = None
+        self.selected_size_index: int | None = None
+
+    def set_selected_color(self, color: Tuple[int, int, int]) -> None:
+        """根据颜色值设置选中的颜色索引。"""
+        try:
+            self.selected_color_index = self.colors.index(color)
+        except ValueError:
+            self.selected_color_index = None
+
+    def set_selected_size(self, size: int) -> None:
+        """根据笔刷大小设置选中的索引。"""
+        try:
+            self.selected_size_index = self.sizes.index(size)
+        except ValueError:
+            # 如果不在列表中，选择最接近的一个
+            if self.sizes:
+                nearest = min(self.sizes, key=lambda s: abs(s - size))
+                try:
+                    self.selected_size_index = self.sizes.index(nearest)
+                except Exception:
+                    self.selected_size_index = None
+            else:
+                self.selected_size_index = None
 
     def handle_event(self, event: pygame.event.Event) -> None:
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
@@ -57,6 +82,8 @@ class Toolbar:
                         break
                     rect = pygame.Rect(cx, cy, swatch_size, swatch_size)
                     if rect.collidepoint(lx, ly):
+                        # 设置选中颜色索引
+                        self.selected_color_index = idx
                         if self.on_color:
                             self.on_color(self.colors[idx])
                         return
@@ -72,6 +99,8 @@ class Toolbar:
                 bx = pad + i * (swatch_size + 10)
                 brect = pygame.Rect(bx, brush_y, swatch_size, swatch_size)
                 if brect.collidepoint(lx, ly):
+                    # 设置选中笔刷索引
+                    self.selected_size_index = i
                     if self.on_brush:
                         self.on_brush(size)
                     return
@@ -117,6 +146,11 @@ class Toolbar:
                 # 颜色块
                 pygame.draw.rect(screen, self.colors[idx], rect, border_radius=4)
                 pygame.draw.rect(screen, (100, 100, 100), rect, 2, border_radius=4)
+                # 高亮当前选中的颜色
+                if self.selected_color_index == idx:
+                    pygame.draw.rect(screen, (50, 120, 220), rect, 3)
+                    inner = rect.inflate(-6, -6)
+                    pygame.draw.rect(screen, (255, 255, 255), inner, 2)
                 cx += swatch_size + 6
                 idx += 1
             cx = self.rect.x + pad
@@ -131,6 +165,11 @@ class Toolbar:
             # 背景 - 浅蓝色
             pygame.draw.rect(screen, (230, 240, 255), brect, border_radius=4)
             pygame.draw.rect(screen, (150, 170, 220), brect, 2, border_radius=4)
+            # 高亮当前选中的笔刷大小
+            if self.selected_size_index == i:
+                pygame.draw.rect(screen, (50, 120, 220), brect, 3, border_radius=4)
+                inner_b = brect.inflate(-6, -6)
+                pygame.draw.rect(screen, (255, 255, 255), inner_b, 2, border_radius=4)
             # 预览圆圈 - 显示实际大小
             pygame.draw.circle(screen, (80, 120, 200), brect.center, max(2, size // 2))
 
