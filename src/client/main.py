@@ -67,6 +67,9 @@ APP_STATE: Dict[str, Any] = {
         "theme": "light",  # light | dark
         "fullscreen": False,
     },
+    # resize 防抖：在窗口调整结束后再重建 UI，减少频繁重建导致的卡顿
+    "pending_resize_until": 0,
+    "pending_resize_size": None,
 }
 
 
@@ -481,6 +484,9 @@ def main() -> None:
         logo_orig, logo_base_size, logo_anchor = load_logo(LOGO_PATH, screen.get_size())
         APP_STATE["ui"] = None
 
+        # 防抖延迟（毫秒），在连续调整窗口时等待短暂静默期再重建 UI
+        RESIZE_DEBOUNCE_MS = 140
+
         clock = pygame.time.Clock()
         running = True
 
@@ -491,17 +497,9 @@ def main() -> None:
                 if event.type == pygame.QUIT:
                     running = False
                 elif event.type == pygame.VIDEORESIZE:
-                    screen = pygame.display.set_mode(event.size, pygame.RESIZABLE)
-                    # 重建当前界面的布局
-                    if APP_STATE["screen"] == "menu":
-                        logo_orig, logo_base_size, logo_anchor = load_logo(LOGO_PATH, screen.get_size())
-                        buttons = create_buttons_from_config(BUTTONS_CONFIG, CALLBACKS, screen.get_size(), logo_anchor, screen_filter="menu")
-                    elif APP_STATE["screen"] == "play":
-                        # Defer full UI construction (including config buttons) to render loop
-                        APP_STATE["ui"] = None
-                    elif APP_STATE["screen"] == "settings":
-                        # Defer full UI construction (including config buttons) to render loop
-                        APP_STATE["ui"] = None
+                    # 记录待处理的尺寸（不在每次事件中重建显示），等待防抖期结束后一次性调用 set_mode
+                    APP_STATE["pending_resize_size"] = event.size
+                    APP_STATE["pending_resize_until"] = pygame.time.get_ticks() + RESIZE_DEBOUNCE_MS
                 else:
                     # 根据当前界面分发事件
                     if APP_STATE["screen"] == "menu":
@@ -653,6 +651,30 @@ def main() -> None:
                                 APP_STATE["settings"]["volume"] = vol
                                 save_settings()
 
+            # 如果存在待处理的 resize 且防抖期已过，则执行一次性的重建操作
+            now_tick = pygame.time.get_ticks()
+            pending_until = APP_STATE.get("pending_resize_until", 0)
+            pending_size = APP_STATE.get("pending_resize_size")
+            if pending_size and now_tick >= pending_until:
+                # finalize resize handling once: set display mode once and rebuild UI
+                try:
+                    screen = pygame.display.set_mode(pending_size, pygame.RESIZABLE)
+                except Exception:
+                    pass
+                try:
+                    if APP_STATE["screen"] == "menu":
+                        logo_orig, logo_base_size, logo_anchor = load_logo(LOGO_PATH, pending_size)
+                        buttons = create_buttons_from_config(
+                            BUTTONS_CONFIG, CALLBACKS, pending_size, logo_anchor, screen_filter="menu"
+                        )
+                    elif APP_STATE["screen"] in ("play", "settings"):
+                        # 在渲染阶段重建 UI（play/settings 会在后续逻辑中重建）
+                        APP_STATE["ui"] = None
+                except Exception:
+                    pass
+                APP_STATE["pending_resize_size"] = None
+                APP_STATE["pending_resize_until"] = 0
+
             screen.fill((245, 248, 255))  # 淡蓝白色背景，更柔和
 
             if APP_STATE["screen"] == "menu":
@@ -764,6 +786,17 @@ def main() -> None:
                 panel_rect = pygame.Rect(20, 20, screen.get_width() - 40, screen.get_height() - 40)
                 pygame.draw.rect(screen, panel_bg, panel_rect)
                 pygame.draw.rect(screen, panel_border, panel_rect, 3)
+
+                # 将返回按钮放置在面板的右上角，避免遮挡面板内部内容
+                if ui.get("back_btn"):
+                    try:
+                        bb = ui["back_btn"]
+                        margin = 20
+                        new_x = panel_rect.right - bb.rect.width - margin
+                        new_y = panel_rect.y + margin
+                        bb.set_position(new_x, new_y)
+                    except Exception:
+                        pass
 
                 try:
                     font_title = pygame.font.SysFont("Microsoft YaHei", 40)
