@@ -1,5 +1,5 @@
 import pygame
-from typing import Callable, List, Tuple
+from typing import Callable, List, Tuple, Optional
 
 
 class Toolbar:
@@ -18,23 +18,23 @@ class Toolbar:
         rect: pygame.Rect,
         colors: List[Tuple[int, int, int]],
         sizes: List[int],
-        font_name: str | None = None,
+        font_name: Optional[str] = None,
     ) -> None:
         self.rect = rect
         self.colors = colors
         self.sizes = sizes
-        self.on_color: Callable[[Tuple[int, int, int]], None] | None = None
-        self.on_brush: Callable[[int], None] | None = None
-        self.on_mode: Callable[[str], None] | None = None
-        self.on_clear: Callable[[], None] | None = None
+        self.on_color: Optional[Callable[[Tuple[int, int, int]], None]] = None
+        self.on_brush: Optional[Callable[[int], None]] = None
+        self.on_mode: Optional[Callable[[str], None]] = None
+        self.on_clear: Optional[Callable[[], None]] = None
         try:
             self.font = pygame.font.SysFont(font_name or None, 18)
         except Exception:
             self.font = pygame.font.SysFont(None, 18)
         self._current_mode = "draw"
         # 当前选中的颜色和笔刷索引（用于高亮显示）
-        self.selected_color_index: int | None = None
-        self.selected_size_index: int | None = None
+        self.selected_color_index: Optional[int] = None
+        self.selected_size_index: Optional[int] = None
 
     def set_selected_color(self, color: Tuple[int, int, int]) -> None:
         """根据颜色值设置选中的颜色索引。"""

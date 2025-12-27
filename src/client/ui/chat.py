@@ -1,5 +1,5 @@
 import pygame
-from typing import List, Tuple
+from typing import List, Tuple, Optional
 
 
 class ChatPanel:
@@ -12,7 +12,7 @@ class ChatPanel:
     - 根据面板高度自动调整显示的行数
     """
 
-    def __init__(self, rect: pygame.Rect, font_size: int = 18, font_name: str | None = None) -> None:
+    def __init__(self, rect: pygame.Rect, font_size: int = 18, font_name: Optional[str] = None) -> None:
         """初始化聊天面板
         
         Args:

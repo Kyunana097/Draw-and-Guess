@@ -1,5 +1,5 @@
 import pygame
-from typing import Tuple
+from typing import Tuple, Optional
 
 
 class Canvas:
@@ -38,7 +38,7 @@ class Canvas:
         
         # 鼠标状态跟踪
         self._drawing: bool = False  # 是否正在绘制
-        self._last_pos: Tuple[int, int] | None = None  # 上一次鼠标位置（用于绘制直线）
+        self._last_pos: Optional[Tuple[int, int]] = None  # 上一次鼠标位置（用于绘制直线）
 
     def to_local(self, pos: Tuple[int, int]) -> Tuple[int, int]:
         """将屏幕坐标转换为画布本地坐标

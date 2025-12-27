@@ -65,6 +65,7 @@ APP_STATE: Dict[str, Any] = {
         "difficulty": "普通",  # 简单 | 普通 | 困难
         "volume": 80,
         "theme": "light",  # light | dark
+        "fullscreen": False,
     },
 }
 
@@ -76,7 +77,7 @@ def load_settings() -> None:
             with open(SETTINGS_PATH, "r", encoding="utf-8") as f:
                 data = json.load(f)
             if isinstance(data, dict):
-                for k in ("player_name", "difficulty", "volume", "theme"):
+                for k in ("player_name", "difficulty", "volume", "theme", "fullscreen"):
                     if k in data:
                         APP_STATE["settings"][k] = data[k]
     except Exception as exc:
@@ -174,6 +175,7 @@ def create_buttons_from_config(
     callbacks_map: Dict[str, Callable[..., Any]],
     screen_size: tuple,
     logo_anchor: Optional[tuple] = None,
+    screen_filter: Optional[str] = None,
 ) -> List[Button]:
     """Create and return Button instances from configuration.
 
@@ -182,12 +184,24 @@ def create_buttons_from_config(
     """
     buttons: List[Button] = []
     for idx, cfg in enumerate(config_list):
+        # 如果指定了 screen_filter，只创建属于该 screen 的按钮
+        if screen_filter is not None and cfg.get("screen") != screen_filter:
+            continue
         x, y, w, h = resolve_position_and_size(cfg, screen_size)
 
-        # start off-screen to the right
+        # start off-screen to the right (for menu animation) or place directly for other screens
         start_x = screen_size[0] + 20 + idx * 8
+        # compute target_x; respect explicit position from cfg by default.
+        if cfg.get("align_to_logo") and logo_anchor is not None:
+            logo_right_x = int(logo_anchor[0])
+            gap = int(cfg.get("align_gap", 0))
+            target_x = logo_right_x - w - gap
+        else:
+            target_x = x
+
+        initial_x = start_x if screen_filter == "menu" else target_x
         btn = Button(
-            x=start_x,
+            x=initial_x,
             y=y,
             width=w,
             height=h,
@@ -197,6 +211,11 @@ def create_buttons_from_config(
             font_size=cfg.get("font_size", 24),
             font_name=cfg.get("font_name", None),
         )
+        # attach config id for callers to find specific buttons
+        try:
+            setattr(btn, "_cfg_id", cfg.get("id"))
+        except Exception:
+            pass
 
         orig = tuple(cfg.get("bg_color", (0, 0, 0)))
         hover = tuple(
@@ -213,16 +232,6 @@ def create_buttons_from_config(
         if cb_name and cb_name in callbacks_map:
             BUTTON_CALLBACKS[id(btn)] = callbacks_map[cb_name]
 
-        # compute target_x; respect explicit position from cfg by default.
-        # If config sets `align_to_logo: True` and a logo_anchor is provided,
-        # align the button's right edge to the logo's right edge minus optional gap.
-        if cfg.get("align_to_logo") and logo_anchor is not None:
-            logo_right_x = int(logo_anchor[0])
-            gap = int(cfg.get("align_gap", 0))
-            target_x = logo_right_x - w - gap
-        else:
-            target_x = x
-
         # register animation state for slide-in from right
         BUTTON_ANIMS[id(btn)] = {
             "start_x": start_x,
@@ -230,7 +239,7 @@ def create_buttons_from_config(
             "y": y,
             "duration": BUTTON_SLIDE_DURATION,
             "delay": idx * BUTTON_STAGGER,
-            "finished": False,
+            "finished": False if screen_filter == "menu" else True,
         }
 
         buttons.append(btn)
@@ -247,6 +256,7 @@ def on_start() -> None:
 def on_settings() -> None:
     logger.info("Settings pressed")
     APP_STATE["screen"] = "settings"
+    APP_STATE["ui"] = None
 
 
 def on_quit() -> None:
@@ -291,18 +301,7 @@ def build_play_ui(screen_size: tuple) -> Dict[str, Any]:
     toolbar = Toolbar(toolbar_rect, colors=BRUSH_COLORS, sizes=BRUSH_SIZES, font_name="Microsoft YaHei")
     chat = ChatPanel(chat_rect, font_size=18, font_name="Microsoft YaHei")
     text_input = TextInput(input_rect, font_name="Microsoft YaHei", font_size=22, placeholder="输入猜词或聊天... Enter发送 / Shift+Enter换行")
-    # 发送按钮
-    send_btn = Button(
-        x=input_rect.right + pad,
-        y=input_rect.y,
-        width=send_w,
-        height=input_h,
-        text="发送",
-        bg_color=(60, 140, 250),
-        fg_color=(255, 255, 255),
-        font_size=20,
-        font_name="Microsoft YaHei",
-    )
+    # 发送按钮将在配置中创建并附加到 UI（位置依赖输入区域）
 
     # 回调绑定
     toolbar.on_color = canvas.set_color
@@ -323,18 +322,7 @@ def build_play_ui(screen_size: tuple) -> Dict[str, Any]:
 
     text_input.on_submit = _on_submit
 
-    # 返回菜单按钮（右上角）
-    back_btn = Button(
-        x=sw - 100 - pad,
-        y=pad,
-        width=100,
-        height=32,
-        text="返回菜单",
-        bg_color=(100, 100, 100),
-        fg_color=(255, 255, 255),
-        font_size=20,
-        font_name="Microsoft YaHei",
-    )
+    # 返回菜单按钮将在配置中创建并附加到 UI
 
     # HUD 状态（计时与词库）
     hud_state = {
@@ -364,8 +352,6 @@ def build_play_ui(screen_size: tuple) -> Dict[str, Any]:
         "toolbar": toolbar,
         "chat": chat,
         "input": text_input,
-        "send_btn": send_btn,
-        "back_btn": back_btn,
         "hud": hud_state,
     }
 
@@ -373,25 +359,24 @@ def build_play_ui(screen_size: tuple) -> Dict[str, Any]:
 def build_settings_ui(screen_size: tuple) -> Dict[str, Any]:
     """构建设置界面组件。"""
     sw, sh = screen_size
-    pad = 32
-    
-    # 返回菜单按钮
-    back_btn = Button(
-        x=pad,
-        y=pad,
-        width=120,
-        height=40,
-        text="← 返回菜单",
-        bg_color=(100, 100, 100),
-        fg_color=(255, 255, 255),
-        font_size=20,
-        font_name="Microsoft YaHei",
-    )
-    
+    # Responsive layout: use percentages so window/fullscreen changes keep UI readable
+    left_x = int(sw * 0.08)
+    control_x = int(sw * 0.22)
+    row1_y = int(sh * 0.16)
+    row2_y = int(sh * 0.36)
+
+    input_w = max(220, min(520, int(sw * 0.36)))
+    input_h = max(36, min(48, int(sh * 0.06)))
+
+    slider_w = max(260, min(620, int(sw * 0.46)))
+    slider_h = 25
+
+    from src.client.ui.setting_components import make_slider_rect
+
     # 玩家名字输入框
     player_name_label = "玩家名字"
     player_name_input = TextInput(
-        rect=pygame.Rect(pad + 200, pad, 300, 40),
+        rect=pygame.Rect(control_x, row1_y, input_w, input_h),
         font_name="Microsoft YaHei",
         font_size=20,
         placeholder=APP_STATE["settings"]["player_name"],
@@ -405,91 +390,23 @@ def build_settings_ui(screen_size: tuple) -> Dict[str, Any]:
         APP_STATE["settings"]["player_name"] = name.strip() or APP_STATE["settings"].get("player_name", "玩家")
         save_settings()
     player_name_input.on_submit = _update_player_name
-    
-    # 难度选择按钮
-    easy_btn = Button(
-        x=pad + 200,
-        y=pad + 100,
-        width=100,
-        height=40,
-        text="简单",
-        bg_color=(76, 175, 80),
-        fg_color=(255, 255, 255),
-        font_size=20,
-        font_name="Microsoft YaHei",
-    )
-    
-    normal_btn = Button(
-        x=pad + 310,
-        y=pad + 100,
-        width=100,
-        height=40,
-        text="普通",
-        bg_color=(33, 150, 243),
-        fg_color=(255, 255, 255),
-        font_size=20,
-        font_name="Microsoft YaHei",
-    )
-    
-    hard_btn = Button(
-        x=pad + 420,
-        y=pad + 100,
-        width=100,
-        height=40,
-        text="困难",
-        bg_color=(244, 67, 54),
-        fg_color=(255, 255, 255),
-        font_size=20,
-        font_name="Microsoft YaHei",
-    )
-    
-    # 音量滑块范围
-    volume_slider_rect = pygame.Rect(pad + 150, pad + 250, 350, 25)
 
-    # 主题切换按钮
-    light_btn = Button(
-        x=pad + 150,
-        y=pad + 320,
-        width=120,
-        height=36,
-        text="浅色主题",
-        bg_color=(180, 200, 220),
-        fg_color=(255, 255, 255),
-        font_size=18,
-        font_name="Microsoft YaHei",
-    )
-    dark_btn = Button(
-        x=pad + 280,
-        y=pad + 320,
-        width=120,
-        height=36,
-        text="深色主题",
-        bg_color=(80, 90, 110),
-        fg_color=(255, 255, 255),
-        font_size=18,
-        font_name="Microsoft YaHei",
-    )
-    
-    # 快捷键说明
-    shortcuts_info = {
-        "1-9": "快速选择颜色",
-        "[": "减小笔刷大小",
-        "]": "增大笔刷大小",
-        "E": "切换橡皮/画笔",
-        "K": "清空画布",
-        "N": "下一回合",
-    }
-    
+    # 难度选择按钮
+    # 难度设置已移除（改为使用默认/固定难度）
+
+    # 音量滑块范围
+    volume_slider_rect = make_slider_rect(control_x, row2_y, slider_w, slider_h)
+
+    # 主题与全屏按钮由配置创建并在主循环中附加到 UI
+
+    # 快捷键说明已移除（快捷键仍然存在于运行时，但不在设置界面展示）
+
     return {
-        "back_btn": back_btn,
         "player_name_input": player_name_input,
-        "easy_btn": easy_btn,
-        "normal_btn": normal_btn,
-        "hard_btn": hard_btn,
+        # difficulty buttons removed
         "volume_slider_rect": volume_slider_rect,
-        "light_btn": light_btn,
-        "dark_btn": dark_btn,
-        "shortcuts_info": shortcuts_info,
+        # theme/fullscreen buttons attached from config
+        # shortcuts removed from UI dict
     }
 
 
@@ -551,8 +468,14 @@ def main() -> None:
         # 加载持久化设置
         load_settings()
 
-        # Create a resizable window and load resources using actual screen size
-        screen = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT), pygame.RESIZABLE)
+        # Create a window or fullscreen depending on saved settings
+        flags = pygame.RESIZABLE
+        if APP_STATE["settings"].get("fullscreen"):
+            flags = pygame.FULLSCREEN
+            # For fullscreen, passing (0,0) lets SDL choose current display mode
+            screen = pygame.display.set_mode((0, 0), flags)
+        else:
+            screen = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT), flags)
         pygame.display.set_caption(WINDOW_TITLE)
 
         logo_orig, logo_base_size, logo_anchor = load_logo(LOGO_PATH, screen.get_size())
@@ -561,7 +484,7 @@ def main() -> None:
         clock = pygame.time.Clock()
         running = True
 
-        buttons = create_buttons_from_config(BUTTONS_CONFIG, CALLBACKS, screen.get_size(), logo_anchor)
+        buttons = create_buttons_from_config(BUTTONS_CONFIG, CALLBACKS, screen.get_size(), logo_anchor, screen_filter="menu")
 
         while running:
             for event in pygame.event.get():
@@ -572,11 +495,13 @@ def main() -> None:
                     # 重建当前界面的布局
                     if APP_STATE["screen"] == "menu":
                         logo_orig, logo_base_size, logo_anchor = load_logo(LOGO_PATH, screen.get_size())
-                        buttons = create_buttons_from_config(BUTTONS_CONFIG, CALLBACKS, screen.get_size(), logo_anchor)
+                        buttons = create_buttons_from_config(BUTTONS_CONFIG, CALLBACKS, screen.get_size(), logo_anchor, screen_filter="menu")
                     elif APP_STATE["screen"] == "play":
-                        APP_STATE["ui"] = build_play_ui(screen.get_size())
+                        # Defer full UI construction (including config buttons) to render loop
+                        APP_STATE["ui"] = None
                     elif APP_STATE["screen"] == "settings":
-                        APP_STATE["ui"] = build_settings_ui(screen.get_size())
+                        # Defer full UI construction (including config buttons) to render loop
+                        APP_STATE["ui"] = None
                 else:
                     # 根据当前界面分发事件
                     if APP_STATE["screen"] == "menu":
@@ -597,12 +522,9 @@ def main() -> None:
                                     cb = BUTTON_CALLBACKS.get(id(b))
                                     if cb:
                                         cb()
-                            # 进入 play 时构建 UI
-                            if APP_STATE["screen"] == "play" and APP_STATE["ui"] is None:
-                                APP_STATE["ui"] = build_play_ui(screen.get_size())
-                            # 进入 settings 时构建 UI
-                            elif APP_STATE["screen"] == "settings" and APP_STATE["ui"] is None:
-                                APP_STATE["ui"] = build_settings_ui(screen.get_size())
+                            # 进入 play/settings 时在渲染阶段统一构建 UI（含配置按钮）
+                            if APP_STATE["screen"] in ("play", "settings"):
+                                APP_STATE["ui"] = None
                     elif APP_STATE["screen"] == "play":
                         ui = APP_STATE["ui"]
                         if ui is None:
@@ -623,11 +545,11 @@ def main() -> None:
                                         if cb:
                                             cb(txt)
                                         ui["input"].text = ""
-                                if ui["back_btn"].is_clicked(event.pos, event.button):
+                                if ui.get("back_btn") and ui["back_btn"].is_clicked(event.pos, event.button):
                                     APP_STATE["screen"] = "menu"
                                     APP_STATE["ui"] = None  # 清除 UI
                                     logo_orig, logo_base_size, logo_anchor = load_logo(LOGO_PATH, screen.get_size())
-                                    buttons = create_buttons_from_config(BUTTONS_CONFIG, CALLBACKS, screen.get_size(), logo_anchor)
+                                    buttons = create_buttons_from_config(BUTTONS_CONFIG, CALLBACKS, screen.get_size(), logo_anchor, screen_filter="menu")
                         else:
                             # 其他事件（键盘等）
                             ui["input"].handle_event(event)
@@ -683,28 +605,46 @@ def main() -> None:
                         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                             mouse_pos = event.pos
                             # 返回按钮
-                            if ui["back_btn"].is_clicked(mouse_pos, event.button):
+                            if ui.get("back_btn") and ui["back_btn"].is_clicked(mouse_pos, event.button):
                                 APP_STATE["screen"] = "menu"
                                 APP_STATE["ui"] = None  # 清除 UI
                                 logo_orig, logo_base_size, logo_anchor = load_logo(LOGO_PATH, screen.get_size())
-                                buttons = create_buttons_from_config(BUTTONS_CONFIG, CALLBACKS, screen.get_size(), logo_anchor)
-                            # 难度选择
-                            elif ui["easy_btn"].is_clicked(mouse_pos, event.button):
-                                APP_STATE["settings"]["difficulty"] = "简单"
-                                save_settings()
-                            elif ui["normal_btn"].is_clicked(mouse_pos, event.button):
-                                APP_STATE["settings"]["difficulty"] = "普通"
-                                save_settings()
-                            elif ui["hard_btn"].is_clicked(mouse_pos, event.button):
-                                APP_STATE["settings"]["difficulty"] = "困难"
-                                save_settings()
+                                buttons = create_buttons_from_config(
+                                    BUTTONS_CONFIG,
+                                    CALLBACKS,
+                                    screen.get_size(),
+                                    logo_anchor,
+                                    screen_filter="menu",
+                                )
+                            # 难度设置已从设置界面移除
                             # 主题切换
-                            elif ui["light_btn"].is_clicked(mouse_pos, event.button):
+                            elif ui.get("light_btn") and ui["light_btn"].is_clicked(mouse_pos, event.button):
                                 APP_STATE["settings"]["theme"] = "light"
                                 save_settings()
-                            elif ui["dark_btn"].is_clicked(mouse_pos, event.button):
+                            elif ui.get("dark_btn") and ui["dark_btn"].is_clicked(mouse_pos, event.button):
                                 APP_STATE["settings"]["theme"] = "dark"
                                 save_settings()
+                            # 全屏切换
+                            elif ui.get("fullscreen_btn") and ui["fullscreen_btn"].is_clicked(mouse_pos, event.button):
+                                cur = bool(APP_STATE["settings"].get("fullscreen", False))
+                                new = not cur
+                                APP_STATE["settings"]["fullscreen"] = new
+                                save_settings()
+                                try:
+                                    if new:
+                                        screen = pygame.display.set_mode((0, 0), pygame.FULLSCREEN)
+                                    else:
+                                        # 切换回窗口模式时使用默认 1280x720
+                                        screen = pygame.display.set_mode((1280, 720), pygame.RESIZABLE)
+                                except Exception:
+                                    pass
+                                # 切换显示模式后刷新 logo 锚点（避免后续回到菜单时沿用旧尺寸）
+                                try:
+                                    logo_orig, logo_base_size, logo_anchor = load_logo(LOGO_PATH, screen.get_size())
+                                except Exception:
+                                    pass
+                                # 重建 UI 以适配新分辨率
+                                APP_STATE["ui"] = None
                         # 音量滑块拖动
                         elif event.type == pygame.MOUSEMOTION and pygame.mouse.get_pressed()[0]:
                             if ui["volume_slider_rect"].collidepoint(event.pos):
@@ -761,25 +701,47 @@ def main() -> None:
                 ui = APP_STATE["ui"]
                 if ui is None:
                     ui = build_play_ui(screen.get_size())
+                    # create play-specific buttons from config and attach to ui
+                    play_buttons = create_buttons_from_config(BUTTONS_CONFIG, CALLBACKS, screen.get_size(), logo_anchor, screen_filter="play")
+                    for pb in play_buttons:
+                        cid = getattr(pb, "_cfg_id", None)
+                        if cid == "play_back":
+                            ui["back_btn"] = pb
+                        elif cid == "play_send":
+                            ui["send_btn"] = pb
                     APP_STATE["ui"] = ui
-                
+
                 # 游戏背景色
                 screen.fill((250, 250, 252))  # 淡灰白色
-                
+
                 # 渲染各组件
                 update_and_draw_hud(screen, ui)
                 ui["canvas"].draw(screen)
                 ui["toolbar"].draw(screen)
                 ui["chat"].draw(screen)
                 ui["input"].draw(screen)
-                ui["send_btn"].draw(screen)
-                ui["back_btn"].draw(screen)
+                if ui.get("send_btn"):
+                    ui["send_btn"].draw(screen)
+                if ui.get("back_btn"):
+                    ui["back_btn"].draw(screen)
             elif APP_STATE["screen"] == "settings":
                 ui = APP_STATE["ui"]
                 if ui is None:
                     ui = build_settings_ui(screen.get_size())
+                    # attach settings buttons from config
+                    settings_buttons = create_buttons_from_config(BUTTONS_CONFIG, CALLBACKS, screen.get_size(), logo_anchor, screen_filter="settings")
+                    for sb in settings_buttons:
+                        cid = getattr(sb, "_cfg_id", None)
+                        if cid == "settings_back":
+                            ui["back_btn"] = sb
+                        elif cid == "settings_light":
+                            ui["light_btn"] = sb
+                        elif cid == "settings_dark":
+                            ui["dark_btn"] = sb
+                        elif cid == "settings_fullscreen":
+                            ui["fullscreen_btn"] = sb
                     APP_STATE["ui"] = ui
-                
+
                 # 根据主题绘制设置界面背景
                 theme = APP_STATE["settings"].get("theme", "light")
                 if theme == "dark":
@@ -797,12 +759,12 @@ def main() -> None:
                     label_color = (60, 60, 60)
                     value_color = (80, 80, 80)
                 screen.fill(bg_color)
-                
+
                 # 绘制设置面板（白色背景，有边框）
                 panel_rect = pygame.Rect(20, 20, screen.get_width() - 40, screen.get_height() - 40)
                 pygame.draw.rect(screen, panel_bg, panel_rect)
                 pygame.draw.rect(screen, panel_border, panel_rect, 3)
-                
+
                 try:
                     font_title = pygame.font.SysFont("Microsoft YaHei", 40)
                     font_label = pygame.font.SysFont("Microsoft YaHei", 24)
@@ -811,85 +773,79 @@ def main() -> None:
                     font_title = pygame.font.SysFont(None, 40)
                     font_label = pygame.font.SysFont(None, 24)
                     font_value = pygame.font.SysFont(None, 20)
-                
+
                 # 标题
                 title = font_title.render("游戏设置", True, title_color)
                 screen.blit(title, (50, 30))
-                
+
                 # 分隔线
                 pygame.draw.line(screen, (200, 200, 200), (50, 90), (screen.get_width() - 50, 90), 2)
-                
+
                 # 玩家名字标签与输入框
+                pn_rect = ui["player_name_input"].rect
                 label = font_label.render("玩家名字:", True, label_color)
-                screen.blit(label, (50, 110))
+                label_x = max(panel_rect.x + 20, pn_rect.x - label.get_width() - 16)
+                label_y = pn_rect.y + (pn_rect.height - label.get_height()) // 2
+                screen.blit(label, (label_x, label_y))
                 ui["player_name_input"].draw(screen)
-                
-                # 难度标签与按钮
-                label = font_label.render("游戏难度:", True, label_color)
-                screen.blit(label, (50, 180))
-                ui["easy_btn"].draw(screen)
-                ui["normal_btn"].draw(screen)
-                ui["hard_btn"].draw(screen)
-                
-                # 当前难度显示
-                difficulty = APP_STATE["settings"]["difficulty"]
-                diff_colors = {"简单": (76, 175, 80), "普通": (33, 150, 243), "困难": (244, 67, 54)}
-                diff_color = diff_colors.get(difficulty, (100, 100, 100))
-                diff_label = font_value.render(f"当前难度: {difficulty}", True, diff_color)
-                screen.blit(diff_label, (450, 195))
-                
+
+                # 难度设置已从界面移除
+
                 # 音量标签与滑块
-                label = font_label.render("音量:", True, label_color)
-                screen.blit(label, (50, 270))
-                
-                # 音量滑块背景
                 slider_rect = ui["volume_slider_rect"]
+                label = font_label.render("音量:", True, label_color)
+                label_x = max(panel_rect.x + 20, slider_rect.x - label.get_width() - 16)
+                label_y = slider_rect.y + (slider_rect.height - label.get_height()) // 2
+                screen.blit(label, (label_x, label_y))
+
+                # 音量滑块背景
                 pygame.draw.rect(screen, (220, 220, 220), slider_rect)
                 pygame.draw.rect(screen, (150, 170, 220), slider_rect, 2)
-                
+
                 # 音量进度条
                 vol = APP_STATE["settings"]["volume"]
                 progress_rect = pygame.Rect(slider_rect.x, slider_rect.y, slider_rect.width * vol / 100, slider_rect.height)
                 pygame.draw.rect(screen, (100, 150, 255), progress_rect)
-                
+
                 # 音量滑块游标
                 slider_x = slider_rect.x + (vol / 100.0) * slider_rect.width
                 pygame.draw.circle(screen, (50, 100, 200), (int(slider_x), int(slider_rect.centery)), 10)
                 pygame.draw.circle(screen, (100, 150, 255), (int(slider_x), int(slider_rect.centery)), 8)
-                
+
                 # 音量百分比显示
                 vol_label = font_value.render(f"音量: {vol}%", True, value_color)
-                screen.blit(vol_label, (450, 280))
+                screen.blit(vol_label, (slider_rect.right + 16, slider_rect.y - 2))
 
                 # 主题切换标签与按钮
+                theme_y = None
+                if ui.get("light_btn"):
+                    theme_y = ui["light_btn"].rect.y
+                elif ui.get("dark_btn"):
+                    theme_y = ui["dark_btn"].rect.y
                 theme_label = font_label.render("主题:", True, label_color)
-                screen.blit(theme_label, (50, 325))
-                ui["light_btn"].draw(screen)
-                ui["dark_btn"].draw(screen)
-                
-                # 快捷键说明区域
-                pygame.draw.line(screen, (200, 200, 200), (50, 320), (screen.get_width() - 50, 320), 2)
-                
-                shortcuts_title = font_label.render("快捷键说明", True, (50, 80, 150))
-                screen.blit(shortcuts_title, (50, 380))
-                
-                shortcuts_info = ui.get("shortcuts_info", {})
-                font_small = pygame.font.SysFont("Microsoft YaHei", 16)
-                shortcut_y = 420
-                col1_x = 50
-                col2_x = screen.get_width() // 2
-                col = 0
-                
-                for key, desc in shortcuts_info.items():
-                    text = f"{key}: {desc}"
-                    shortcut_text = font_small.render(text, True, (80, 80, 80))
-                    x = col1_x if col % 2 == 0 else col2_x
-                    y = shortcut_y + (col // 2) * 25
-                    screen.blit(shortcut_text, (x, y))
-                    col += 1
-                
+                if theme_y is None:
+                    screen.blit(theme_label, (panel_rect.x + 20, panel_rect.y + 220))
+                else:
+                    screen.blit(theme_label, (panel_rect.x + 20, theme_y + 6))
+                if ui.get("light_btn"):
+                    ui["light_btn"].draw(screen)
+                if ui.get("dark_btn"):
+                    ui["dark_btn"].draw(screen)
+                # 全屏切换按钮
+                if ui.get("fullscreen_btn"):
+                    # 动态刷新文案，避免显示状态不一致
+                    try:
+                        is_fs = bool(APP_STATE["settings"].get("fullscreen", False))
+                        ui["fullscreen_btn"].update_text(f"全屏: {'是' if is_fs else '否'}")
+                    except Exception:
+                        pass
+                    ui["fullscreen_btn"].draw(screen)
+
+                # 快捷键说明已从设置界面移除
+
                 # 返回按钮
-                ui["back_btn"].draw(screen)
+                if ui.get("back_btn"):
+                    ui["back_btn"].draw(screen)
 
             pygame.display.flip()
             clock.tick(60)
