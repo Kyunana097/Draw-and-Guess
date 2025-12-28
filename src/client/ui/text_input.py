@@ -79,18 +79,15 @@ class TextInput:
             if self.active and not was_active:
                 try:
                     pygame.key.start_text_input()
-                    # 提示系统 IME 候选框位置
-                    try:
-                        pygame.key.set_text_input_rect(self.rect)
-                    except Exception:
-                        pass
-                except Exception:
-                    pass
+                    # 设置输入法候选框位置
+                    pygame.key.set_text_input_rect(self.rect)
+                except Exception as e:
+                    print(f"启动文本输入失败: {e}")
             elif (not self.active) and was_active:
                 try:
                     pygame.key.stop_text_input()
-                except Exception:
-                    pass
+                except Exception as e:
+                    print(f"停止文本输入失败: {e}")
         elif event.type == pygame.KEYDOWN and self.active:
             # 只在输入框激活状态下处理键盘输入
             if event.key == pygame.K_RETURN:
@@ -127,11 +124,10 @@ class TextInput:
                 self.comp_length = 0
             elif event.key == pygame.K_BACKSPACE:
                 # Backspace 键：删除最后一个字符
-                self.text = self.text[:-1]
-            else:
-                # 其他按键：输入字符（限制长度为 64）
-                if event.unicode and len(self.text) < 64:
-                    self.text += event.unicode  # 只接受可打印字符
+                if self.text:
+                    self.text = self.text[:-1]
+            # 注意：不再在KEYDOWN中处理字符输入，避免双击问题
+            # 字符输入通过TEXTINPUT事件处理，支持输入法
         elif event.type == pygame.TEXTINPUT and self.active:
             # 处理中文等输入法提交事件（已选定候选）
             if event.text:
@@ -182,7 +178,7 @@ class TextInput:
         # 绘制在输入框内（左边距 8 像素，垂直居中）
         screen.blit(surf, (self.rect.x + 8, self.rect.y + (self.rect.height - surf.get_height()) // 2))
 
-        # 主动提示系统 IME 候选框位置（若可用）
+        # 更新输入法候选框位置（若可用）
         if self.active:
             try:
                 pygame.key.set_text_input_rect(self.rect)

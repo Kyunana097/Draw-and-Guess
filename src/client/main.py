@@ -466,6 +466,17 @@ def main() -> None:
 
     try:
         pygame.init()
+        
+        # 初始化SDL文本输入支持（用于中文输入法）
+        try:
+            import os
+            os.environ['SDL_IME_SHOW_UI'] = '1'
+            # 重新初始化显示模块以应用环境变量
+            pygame.display.quit()
+            pygame.display.init()
+        except Exception as e:
+            logger.warning(f"初始化输入法支持失败: {e}")
+        
         # 加载持久化设置
         load_settings()
 
