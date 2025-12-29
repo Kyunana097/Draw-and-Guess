@@ -874,7 +874,7 @@ def main() -> None:
         # Create a window or fullscreen depending on saved settings
         flags = pygame.RESIZABLE
         if APP_STATE["settings"].get("fullscreen"):
-            flags = pygame.FULLSCREEN
+            flags = pygame.FULLSCREEN_DESKTOP
             screen = pygame.display.set_mode((0, 0), flags)
         else:
             screen = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT), flags)
@@ -909,7 +909,7 @@ def main() -> None:
             save_settings()
             try:
                 if new:
-                    screen = pygame.display.set_mode((0, 0), pygame.FULLSCREEN)
+                    screen = pygame.display.set_mode((0, 0), pygame.FULLSCREEN_DESKTOP)
                 else:
                     screen = pygame.display.set_mode((1280, 720), pygame.RESIZABLE)
                 logo_orig, logo_base_size, logo_anchor = load_logo(LOGO_PATH, screen.get_size())
@@ -1185,8 +1185,13 @@ def main() -> None:
             pending_size = APP_STATE.get("pending_resize_size")
             if pending_size and now_tick >= pending_until:
                 # finalize resize handling once: set display mode once and rebuild UI
+                # 保留全屏状态，不要在resize时强制改变全屏标志
                 try:
-                    screen = pygame.display.set_mode(pending_size, pygame.RESIZABLE)
+                    is_fullscreen = bool(APP_STATE["settings"].get("fullscreen", False))
+                    if is_fullscreen:
+                        screen = pygame.display.set_mode(pending_size, pygame.FULLSCREEN_DESKTOP)
+                    else:
+                        screen = pygame.display.set_mode(pending_size, pygame.RESIZABLE)
                 except Exception:
                     pass
                 try:
