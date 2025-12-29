@@ -191,8 +191,10 @@ class NetworkServer:
 				self.broadcast(Message("room_state", self.room.get_public_state()))
 		elif t == MSG_DRAW:
 			# // 绘图：透传画笔数据给其他客户端（不入房间逻辑）
+			print(f"[DEBUG] 收到 MSG_DRAW 消息，来自 {sess.player_id}: {data}")
 			payload = {"by": sess.player_id, "data": data}
 			self.broadcast(Message("draw_sync", payload), exclude=sess)
+			print(f"[DEBUG] 广播 draw_sync 消息完成")
 		elif t == MSG_CHAT:
 			# // 聊天广播
 			payload = {

@@ -401,6 +401,17 @@ def build_play_ui(screen_size: tuple) -> Dict[str, Any]:
         chat.add_message("你", safe)
 
     text_input.on_submit = _on_submit
+    
+    # 绘画同步回调：当本地画布有绘画操作时，发送给服务器
+    def _on_draw_action(action: dict) -> None:
+        try:
+            net = APP_STATE.get("net")
+            if net and net.connected:
+                net.send_draw(action)
+        except Exception:
+            pass
+    
+    canvas.on_draw_action = _on_draw_action
 
     # 返回菜单按钮将在配置中创建并附加到 UI
 
@@ -533,6 +544,19 @@ def process_network_messages(ui: Optional[Dict[str, Any]]) -> None:
             text = str(data.get("text") or "").replace("\n", " ")
             try:
                 ui["chat"].add_message(label, text)
+            except Exception:
+                pass
+        elif msg.type == "draw_sync":
+            # 处理远程绘画同步
+            by_id = data.get("by")
+            if by_id and self_id and str(by_id) == str(self_id):
+                # 跳过自己的绘画动作（已在本地显示）
+                continue
+            draw_data = data.get("data", {})
+            try:
+                canvas = ui.get("canvas")
+                if canvas:
+                    canvas.apply_remote_action(draw_data)
             except Exception:
                 pass
         elif msg.type == "room_state":

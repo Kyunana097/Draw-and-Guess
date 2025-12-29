@@ -7,9 +7,9 @@ import socket
 import threading
 import uuid
 from queue import SimpleQueue, Empty
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 
-from src.shared.constants import BUFFER_SIZE, DEFAULT_HOST, DEFAULT_PORT, MSG_CHAT, MSG_CONNECT, MSG_JOIN_ROOM
+from src.shared.constants import BUFFER_SIZE, DEFAULT_HOST, DEFAULT_PORT, MSG_CHAT, MSG_CONNECT, MSG_JOIN_ROOM, MSG_DRAW
 from src.shared.protocols import Message
 
 
@@ -59,6 +59,18 @@ class NetworkClient:
         if not self.connected:
             return
         self._send(Message(MSG_CHAT, {"text": text}))
+
+    def send_draw(self, payload: Dict[str, Any]) -> None:
+        """发送绘画同步消息到服务器
+        
+        Args:
+            payload: 绘画动作数据，包括kind、颜色、大小等
+        """
+        if not payload:
+            return
+        if not self.connected:
+            return
+        self._send(Message(MSG_DRAW, payload))
 
     def drain_events(self) -> List[Message]:
         items: List[Message] = []
