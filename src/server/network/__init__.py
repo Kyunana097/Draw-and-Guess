@@ -73,6 +73,23 @@ class NetworkServer:
 		self.sessions: Dict[int, ClientSession] = {}
 		self.rooms: Dict[str, GameRoom] = {}
 
+	def _rooms_snapshot(self) -> list:
+		"""构建当前房间的简要列表快照。"""
+		rooms = []
+		for rid, r in self.rooms.items():
+			rooms.append({
+				"room_id": rid,
+				"player_count": len(r.players),
+				"status": r.status
+			})
+		return rooms
+
+	def broadcast_rooms_update(self) -> None:
+		"""向所有连接广播房间列表更新。"""
+		payload = {"rooms": self._rooms_snapshot()}
+		for s in list(self.sessions.values()):
+			self._send(s, Message("rooms_update", payload))
+
 	# 服务器生命周期
 	def start(self) -> None:
 		"""启动服务器并进入 Accept 循环"""
@@ -178,6 +195,8 @@ class NetworkServer:
 				
 				self._send(sess, Message("ack", {"ok": True, "event": MSG_CREATE_ROOM, "room_id": room_id}))
 			self.broadcast_room_state(room_id)
+			# 广播房间列表更新，便于其他客户端立刻看到新房间
+			self.broadcast_rooms_update()
 		elif t == MSG_LIST_ROOMS:
 			# 获取房间列表
 			room_list = []
@@ -205,6 +224,8 @@ class NetworkServer:
 								room.owner_id = sess.player_id
 						self._send(sess, Message("ack", {"ok": True, "event": MSG_JOIN_ROOM, "room_id": target_room_id}))
 						self.broadcast_room_state(target_room_id)
+						# 广播房间列表更新（人数变化）
+						self.broadcast_rooms_update()
 					else:
 						self._send(sess, Message("error", {"msg": "Could not join room"}))
 			else:
@@ -241,6 +262,8 @@ class NetworkServer:
 				if sess.player_id:
 					room.remove_player(sess.player_id)
 				self.broadcast_room_state(sess.room_id)
+				# 广播房间列表更新（人数变化或房间清理）
+				self.broadcast_rooms_update()
 				if not room.players:
 					del self.rooms[sess.room_id]
 			
@@ -257,6 +280,7 @@ class NetworkServer:
 					if target_player_id in room.players:
 						room.remove_player(target_player_id)
 					self.broadcast_room_state(sess.room_id)
+					self.broadcast_rooms_update()
 					for s in self.sessions.values():
 						if s.player_id == target_player_id:
 							s.room_id = None

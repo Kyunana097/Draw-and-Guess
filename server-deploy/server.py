@@ -172,10 +172,39 @@ class NetworkServer:
         self.rooms: Dict[str, GameRoom] = {}
         self._lock = threading.Lock()
 
+    def _rooms_snapshot(self) -> list:
+        """构建当前房间的简要列表快照。"""
+        room_list = []
+        for rid, r in self.rooms.items():
+            room_list.append({
+                "room_id": rid,
+                "player_count": len(r.players),
+                "status": r.status
+            })
+        return room_list
+
+    def broadcast_all(self, msg: Message, exclude: Optional[ClientSession] = None) -> None:
+        """向所有会话广播消息。"""
+        with self._lock:
+            for sess in list(self.sessions.values()):
+                if exclude and sess is exclude:
+                    continue
+                self._send(sess, msg)
+
+    def broadcast_rooms_update(self) -> None:
+        """向所有连接广播房间列表更新。"""
+        payload = {"rooms": self._rooms_snapshot()}
+        self.broadcast_all(Message("rooms_update", payload))
+
     def start(self) -> None:
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self.sock.bind((self.host, self.port))
+        try:
+            self.sock.bind((self.host, self.port))
+        except OSError as e:
+            # 端口占用的友好提示，避免直接栈溢出报错
+            logger.error("端口 %s 已被占用，无法启动独立服务器。请停止其他服务器或修改 PORT 环境变量。", self.port)
+            raise
         self.sock.listen(32)
         self._running.set()
         threading.Thread(target=self._accept_loop, daemon=True).start()
@@ -263,6 +292,8 @@ class NetworkServer:
                 sess.room_id = room_id
                 self._send(sess, Message("ack", {"ok": True, "event": MSG_CREATE_ROOM, "room_id": room_id}))
                 self.broadcast_room(room_id, Message(MSG_ROOM_UPDATE, new_room.get_public_state()))
+                # 广播房间列表更新，便于其他客户端立刻看到新房间
+                self.broadcast_rooms_update()
 
         elif t == MSG_LIST_ROOMS:
             room_list = []
@@ -289,6 +320,7 @@ class NetworkServer:
                                 room.owner_id = sess.player_id
                         self._send(sess, Message("ack", {"ok": True, "event": MSG_JOIN_ROOM, "room_id": target_room_id}))
                         self.broadcast_room(target_room_id, Message(MSG_ROOM_UPDATE, room.get_public_state()))
+                        self.broadcast_rooms_update()
                     else:
                         self._send(sess, Message("error", {"msg": "Could not join room"}))
             else:
@@ -300,6 +332,7 @@ class NetworkServer:
                 if sess.player_id:
                     room.remove_player(sess.player_id)
                     self.broadcast_room(sess.room_id, Message(MSG_ROOM_UPDATE, room.get_public_state()))
+                    self.broadcast_rooms_update()
                     if not room.players:
                         del self.rooms[sess.room_id]
             sess.room_id = None
@@ -313,6 +346,7 @@ class NetworkServer:
                     if target_player_id in room.players:
                         room.remove_player(target_player_id)
                         self.broadcast_room(sess.room_id, Message(MSG_ROOM_UPDATE, room.get_public_state()))
+                        self.broadcast_rooms_update()
                         for s in self.sessions.values():
                             if s.player_id == target_player_id:
                                 s.room_id = None
