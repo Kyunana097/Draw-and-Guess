@@ -721,7 +721,6 @@ def process_network_messages(ui: Optional[Dict[str, Any]]) -> None:
                 ui["chat"].add_message(label, text)
             except Exception:
                 pass
-<<<<<<< HEAD
         elif msg.type == "draw_sync":
             # 处理远程绘画同步
             by_id = data.get("by")
@@ -742,8 +741,6 @@ def process_network_messages(ui: Optional[Dict[str, Any]]) -> None:
                     hud["round_time_left"] = data.get("time_left", hud.get("round_time_left", 60))
                 except Exception:
                     pass
-=======
->>>>>>> 9f8090422ef7c495b7e3e4095e6d5f4f4d5ec33a
 
 
 def update_and_draw_hud(screen: pygame.Surface, ui: Dict[str, Any]) -> None:
@@ -1085,7 +1082,13 @@ def main() -> None:
                                     idx += 1
                             ui["kick_buttons"] = kick_buttons
 
-                        if ui.get("start_btn"): ui["start_btn"].handle_event(event)
+                        # 只有房主才能点击"开始游戏"
+                        current_room = APP_STATE.get("current_room") or {}
+                        owner_id = current_room.get("owner_id")
+                        self_id = APP_STATE.get("settings", {}).get("player_id")
+                        is_owner = owner_id and self_id and str(owner_id) == str(self_id)
+                        
+                        if is_owner and ui.get("start_btn"): ui["start_btn"].handle_event(event)
                         if ui.get("leave_btn"): ui["leave_btn"].handle_event(event)
                         for btn in ui.get("kick_buttons", []):
                             btn.handle_event(event)
@@ -1246,7 +1249,14 @@ def main() -> None:
                 process_network_messages(APP_STATE.get("ui"))
                 ui = APP_STATE["ui"]
                 if ui:
-                    if ui.get("start_btn"): ui["start_btn"].draw(screen)
+                    # 检查是否为房主
+                    current_room = APP_STATE.get("current_room") or {}
+                    owner_id = current_room.get("owner_id")
+                    self_id = APP_STATE.get("settings", {}).get("player_id")
+                    is_owner = owner_id and self_id and str(owner_id) == str(self_id)
+                    
+                    # 只有房主才显示"开始游戏"按钮
+                    if is_owner and ui.get("start_btn"): ui["start_btn"].draw(screen)
                     if ui.get("leave_btn"): ui["leave_btn"].draw(screen)
                     for btn in ui.get("kick_buttons", []):
                         btn.draw(screen)

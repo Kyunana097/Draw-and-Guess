@@ -9,9 +9,6 @@ import uuid
 from queue import SimpleQueue, Empty
 from typing import List, Optional, Dict, Any
 
-<<<<<<< HEAD
-from src.shared.constants import BUFFER_SIZE, DEFAULT_HOST, DEFAULT_PORT, MSG_CHAT, MSG_CONNECT, MSG_JOIN_ROOM, MSG_DRAW
-=======
 from src.shared.constants import (
     BUFFER_SIZE, 
     DEFAULT_HOST, 
@@ -23,9 +20,9 @@ from src.shared.constants import (
     MSG_LIST_ROOMS,
     MSG_LEAVE_ROOM,
     MSG_KICK_PLAYER,
-    MSG_START_GAME
+    MSG_START_GAME,
+    MSG_DRAW
 )
->>>>>>> 9f8090422ef7c495b7e3e4095e6d5f4f4d5ec33a
 from src.shared.protocols import Message
 
 
