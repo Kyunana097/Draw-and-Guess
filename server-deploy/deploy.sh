@@ -7,20 +7,14 @@ echo "========================================"
 echo "  Draw & Guess 游戏服务器部署脚本"
 echo "========================================"
 
-# 检测系统
-if ! command -v apt &> /dev/null; then
-    echo " 此脚本仅支持 Ubuntu/Debian 系统"
-    exit 1
-fi
-
-# 安装依赖
+# 安装依赖提示
 echo ""
-echo " 安装系统依赖..."
-sudo apt update
-sudo apt install -y python3 python3-venv python3-pip screen
+echo " 请确保系统已安装: python3, python3-venv, screen"
+echo "   如未安装，请联系管理员执行:"
+echo "   apt install -y python3 python3-venv python3-pip screen"
+echo ""
 
 # 创建虚拟环境
-echo ""
 echo " 创建 Python 虚拟环境..."
 if [ ! -d "venv" ]; then
     python3 -m venv venv
@@ -33,11 +27,10 @@ echo " 安装 Python 依赖..."
 pip install --upgrade pip
 pip install -r requirements.txt
 
-# 配置防火墙
+# 设置脚本权限
 echo ""
-echo " 配置防火墙..."
-sudo ufw allow 5555/tcp 2>/dev/null || true
-echo " 端口 5555 已开放"
+echo " 设置脚本权限..."
+chmod 755 *.sh
 
 # 获取公网 IP
 echo ""
