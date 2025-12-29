@@ -331,6 +331,9 @@ class NetworkServer:
         elif t == MSG_START_GAME:
             if sess.room_id and sess.room_id in self.rooms:
                 room = self.rooms[sess.room_id]
+                # 若尚未设定房主，则将当前请求者设为房主（容错）
+                if room.owner_id is None and sess.player_id:
+                    room.owner_id = sess.player_id
                 if room.owner_id == sess.player_id:
                     room.status = "playing"
                     room.round_number = 1

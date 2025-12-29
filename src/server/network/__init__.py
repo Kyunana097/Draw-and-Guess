@@ -197,7 +197,7 @@ class NetworkServer:
 					if room.add_player(sess.player_id, sess.player_name):
 						sess.room_id = target_room_id
 						self._send(sess, Message("ack", {"ok": True, "event": MSG_JOIN_ROOM, "room_id": target_room_id}))
-					self.broadcast_room_state(target_room_id)
+						self.broadcast_room_state(target_room_id)
 					else:
 						self._send(sess, Message("error", {"msg": "Could not join room"}))
 			else:
@@ -210,8 +210,8 @@ class NetworkServer:
 				if sess.player_id:
 					room.remove_player(sess.player_id)
 				self.broadcast_room_state(sess.room_id)
-					if not room.players:
-						del self.rooms[sess.room_id]
+				if not room.players:
+					del self.rooms[sess.room_id]
 			
 			sess.room_id = None
 			self._send(sess, Message("ack", {"ok": True, "event": MSG_LEAVE_ROOM}))
@@ -226,11 +226,11 @@ class NetworkServer:
 					if target_player_id in room.players:
 						room.remove_player(target_player_id)
 					self.broadcast_room_state(sess.room_id)
-						for s in self.sessions.values():
-							if s.player_id == target_player_id:
-								s.room_id = None
-								self._send(s, Message("event", {"type": MSG_KICK_PLAYER, "room_id": room.room_id}))
-								break
+					for s in self.sessions.values():
+						if s.player_id == target_player_id:
+							s.room_id = None
+							self._send(s, Message("event", {"type": MSG_KICK_PLAYER, "room_id": room.room_id}))
+							break
 				else:
 					self._send(sess, Message("error", {"msg": "Permission denied"}))
 
@@ -238,16 +238,18 @@ class NetworkServer:
 			# 启动游戏 - 生成随机绘画顺序
 			if sess.room_id and sess.room_id in self.rooms:
 				room = self.rooms[sess.room_id]
+				# 若尚未设定房主，则将当前请求者设为房主（容错）
+				if room.owner_id is None and sess.player_id:
+					room.owner_id = sess.player_id
 				if room.owner_id == sess.player_id:
 					# 调用 start_game 生成随机顺序并进入第一轮
 					ok = room.start_game()
-					
 					if ok:
-					# 广播游戏开始和房间状态更新（词语隐藏）
-					self.broadcast_room_state(sess.room_id)
+						# 广播游戏开始和房间状态更新（词语隐藏）
+						self.broadcast_room_state(sess.room_id)
 						# 发送特定的游戏开始事件，包含绘画顺序信息
 						self.broadcast_room(sess.room_id, Message("event", {
-							"type": MSG_START_GAME, 
+							"type": MSG_START_GAME,
 							"ok": True,
 							"drawer_order": room.drawer_order,
 							"drawer_id": room.drawer_id,
@@ -265,21 +267,20 @@ class NetworkServer:
 			if sess.room_id and sess.room_id in self.rooms:
 				room = self.rooms[sess.room_id]
 				ok = room.next_round()
-				
 				if ok:
-				# 广播房间状态更新（词语隐藏）
-				self.broadcast_room_state(sess.room_id)
-				# 发送轮次开始事件
-				self.broadcast_room(sess.room_id, Message("event", {
-					"type": MSG_NEXT_ROUND,
-					"ok": True,
-					"drawer_id": room.drawer_id,
-					"round_number": room.round_number
-				}))
-			else:
-				# 游戏结束
-				self.broadcast_room(sess.room_id, Message("event", {"type": MSG_END_GAME, "ok": True}))
-				self.broadcast_room_state(sess.room_id)
+					# 广播房间状态更新（词语隐藏）
+					self.broadcast_room_state(sess.room_id)
+					# 发送轮次开始事件
+					self.broadcast_room(sess.room_id, Message("event", {
+						"type": MSG_NEXT_ROUND,
+						"ok": True,
+						"drawer_id": room.drawer_id,
+						"round_number": room.round_number
+					}))
+				else:
+					# 游戏结束
+					self.broadcast_room(sess.room_id, Message("event", {"type": MSG_END_GAME, "ok": True}))
+					self.broadcast_room_state(sess.room_id)
 		elif t == MSG_END_GAME:
 			if sess.room_id and sess.room_id in self.rooms:
 				room = self.rooms[sess.room_id]
@@ -299,7 +300,6 @@ class NetworkServer:
 					ok, score = False, 0
 					self._send(sess, Message("guess_result", {"ok": ok, "score": score}))
 				self.broadcast_room_state(sess.room_id)
-				self.broadcast_room(sess.room_id, Message("draw_sync", payload), exclude=sess)
 		elif t == MSG_CHAT:
 			# 聊天
 			if sess.room_id:

@@ -611,7 +611,7 @@ def build_settings_ui(screen_size: tuple, confirm_sound: Optional[pygame.mixer.S
         _update_server_host(server_host_input.text)
     confirm_host_btn.on_click = _on_confirm_host
 
-    # 局域网按钮：自动检测本机IP，启动本地服务器，并设置地址
+    # 局域网按钮：自动检测本机IP、填入并可继续修改；必要时启动本地服务器
     lan_btn = Button(
         x=confirm_btn_x,
         y=row3_y + input_h + 12,
@@ -627,6 +627,11 @@ def build_settings_ui(screen_size: tuple, confirm_sound: Optional[pygame.mixer.S
     )
     def _on_lan():
         ip = detect_local_ip()
+        # 填入输入框，便于用户进一步修改
+        try:
+            server_host_input.text = ip
+        except Exception:
+            pass
         _update_server_host(ip)
         # 若本地尚未启动服务器，则尝试启动
         proc = APP_STATE.get("_local_server_proc")
@@ -651,32 +656,13 @@ def build_settings_ui(screen_size: tuple, confirm_sound: Optional[pygame.mixer.S
         click_sound=confirm_sound,
     )
     def _on_remote():
-        _update_server_host("81.68.144.16")
-    remote_btn.on_click = _on_remote
-
-    # 自动检测本机地址并填入（用于局域网联机）
-    detect_ip_btn = Button(
-        x=confirm_btn_x + input_h + 10,
-        y=row3_y,
-        width=max(120, int(input_w * 0.4)),
-        height=input_h,
-        text="自动填入本机地址",
-        bg_color=(80, 150, 200),
-        fg_color=(255, 255, 255),
-        hover_bg_color=(90, 170, 220),
-        font_size=18,
-        font_name="Microsoft YaHei",
-        click_sound=confirm_sound,
-    )
-    def _on_detect_ip():
-        ip = detect_local_ip()
+        # 预填入远程地址，仍可在输入框中修改
         try:
-            server_host_input.text = ip
+            server_host_input.text = "81.68.144.16"
         except Exception:
             pass
-        _update_server_host(ip)
-        add_notification(f"已自动填入本机地址: {ip}", color=(60, 160, 220))
-    detect_ip_btn.on_click = _on_detect_ip
+        _update_server_host("81.68.144.16")
+    remote_btn.on_click = _on_remote
 
     # 主题与全屏按钮由配置创建并在主循环中附加到 UI
 
@@ -689,7 +675,6 @@ def build_settings_ui(screen_size: tuple, confirm_sound: Optional[pygame.mixer.S
         "confirm_host_btn": confirm_host_btn,
         "server_lan_btn": lan_btn,
         "server_remote_btn": remote_btn,
-        "detect_ip_btn": detect_ip_btn,
         # difficulty buttons removed
         "volume_slider_rect": volume_slider_rect,
         # theme/fullscreen buttons attached from config
@@ -736,6 +721,18 @@ def build_room_list_ui(screen_size: tuple) -> Dict[str, Any]:
                 add_notification("正在创建房间...", color=(50, 180, 80))
                 net.create_room(f"{player_name}的房间")
                 # 立即切到大厅，等待服务器确认，提升可见性
+                # 预填充最小房间状态，先显示本地玩家列表，待服务器广播覆盖
+                try:
+                    APP_STATE["current_room"] = {
+                        "room_id": None,
+                        "status": "waiting",
+                        "owner_id": player_id,
+                        "players": {
+                            str(player_id): {"name": player_name, "score": 0}
+                        }
+                    }
+                except Exception:
+                    pass
                 APP_STATE["screen"] = "lobby"
                 APP_STATE["ui"] = None
                 add_notification("等待服务器确认进入大厅...", color=(120, 120, 220))
@@ -871,8 +868,10 @@ def build_lobby_ui(screen_size: tuple) -> Dict[str, Any]:
     
     # 聊天输入框
     chat_input_w = max(240, chat_rect.width - 100)
+    # 将输入框与发送按钮保持在窗口内，紧贴聊天面板底部
+    chat_input_y = chat_rect.bottom - 35 - 8
     chat_input = TextInput(
-        rect=pygame.Rect(chat_rect.x, chat_rect.bottom + 10, chat_input_w, 35),
+        rect=pygame.Rect(chat_rect.x, chat_input_y, chat_input_w, 35),
         font_name="Microsoft YaHei",
         font_size=16,
         placeholder="输入消息..."
@@ -880,7 +879,7 @@ def build_lobby_ui(screen_size: tuple) -> Dict[str, Any]:
     
     # 发送按钮
     send_btn = Button(
-        x=chat_rect.right - 80, y=chat_rect.bottom + 10,
+        x=chat_rect.right - 80, y=chat_input_y,
         width=70, height=35,
         text="发送", bg_color=(50, 150, 200), fg_color=(255, 255, 255),
         font_name="Microsoft YaHei", font_size=16
@@ -950,6 +949,20 @@ def process_network_messages(ui: Optional[Dict[str, Any]]) -> None:
                 add_notification("房间创建成功，已进入大厅", color=(50, 180, 80))
             elif event == MSG_JOIN_ROOM:
                 if data.get("ok"):
+                    # 预填充当前房间的最小状态，等待服务器广播覆盖
+                    try:
+                        self_id = APP_STATE.get("settings", {}).get("player_id")
+                        room_id = data.get("room_id")
+                        player_name = APP_STATE["settings"].get("player_name", "玩家")
+                        APP_STATE["current_room"] = {
+                            "room_id": room_id,
+                            "status": "waiting",
+                            "players": {
+                                str(self_id): {"name": player_name, "score": 0}
+                            }
+                        }
+                    except Exception:
+                        pass
                     APP_STATE["screen"] = "lobby"
                     APP_STATE["ui"] = None
                     add_notification("加入房间成功，已进入大厅", color=(50, 180, 80))
@@ -1065,6 +1078,12 @@ def process_network_messages(ui: Optional[Dict[str, Any]]) -> None:
                 except Exception:
                     pass
 
+        # 错误反馈
+        if msg.type == "error":
+            err = data.get("msg") or "操作失败"
+            add_notification(f"错误: {err}", color=(200, 60, 60))
+            continue
+
 
 def update_and_draw_hud(screen: pygame.Surface, ui: Dict[str, Any]) -> None:
     """更新倒计时并绘制顶部 HUD（计时、词、模式与画笔状态）。"""
@@ -1153,6 +1172,15 @@ def main() -> None:
                 confirm_sound = pygame.mixer.Sound(str(CONFIRM_SOUND_PATH))
             except Exception as e:
                 logger.warning(f"加载确认音效失败: {e}")
+        # 应用音量到音效
+        try:
+            vol = float(APP_STATE["settings"].get("volume", 80)) / 100.0
+            if confirm_sound:
+                confirm_sound.set_volume(max(0.0, min(1.0, vol)))
+        except Exception:
+            pass
+        # 将音效保存到全局状态以便设置界面动态调整
+        APP_STATE["confirm_sound"] = confirm_sound
 
         # Create a window or fullscreen depending on saved settings
         flags = pygame.RESIZABLE
@@ -1427,14 +1455,15 @@ def main() -> None:
                                     idx += 1
                             ui["kick_buttons"] = kick_buttons
 
-                        # 只有房主才能点击"开始游戏"
+                        # 开始游戏按钮对所有人可点击，服务器侧仍做权限校验
+                        if ui.get("start_btn"): ui["start_btn"].handle_event(event)
+
+                        # 仅房主可编辑游戏参数
                         current_room = APP_STATE.get("current_room") or {}
                         owner_id = current_room.get("owner_id")
                         self_id = APP_STATE.get("settings", {}).get("player_id")
                         is_owner = owner_id and self_id and str(owner_id) == str(self_id)
-                        
                         if is_owner:
-                            if ui.get("start_btn"): ui["start_btn"].handle_event(event)
                             if ui.get("rounds_input"): ui["rounds_input"].handle_event(event)
                             if ui.get("time_input"): ui["time_input"].handle_event(event)
                             if ui.get("rest_input"): ui["rest_input"].handle_event(event)
@@ -1484,7 +1513,7 @@ def main() -> None:
                             ui["server_host_input"].handle_event(event)
 
                         # 处理按钮事件
-                        for btn_key in ["back_btn", "light_btn", "dark_btn", "fullscreen_btn", "confirm_name_btn", "confirm_host_btn", "server_lan_btn", "server_remote_btn", "detect_ip_btn"]:
+                        for btn_key in ["back_btn", "light_btn", "dark_btn", "fullscreen_btn", "confirm_name_btn", "confirm_host_btn", "server_lan_btn", "server_remote_btn"]:
                             if ui.get(btn_key):
                                 ui[btn_key].handle_event(event)
 
@@ -1495,6 +1524,13 @@ def main() -> None:
                                 vol = max(0, min(100, int(rel_x / ui["volume_slider_rect"].width * 100)))
                                 APP_STATE["settings"]["volume"] = vol
                                 save_settings()
+                                # 动态调整点击音效音量
+                                try:
+                                    snd = APP_STATE.get("confirm_sound")
+                                    if snd:
+                                        snd.set_volume(vol / 100.0)
+                                except Exception:
+                                    pass
 
             if APP_STATE["screen"] == "play":
                 process_network_messages(APP_STATE.get("ui"))
@@ -1718,8 +1754,8 @@ def main() -> None:
                     self_id = APP_STATE.get("settings", {}).get("player_id")
                     is_owner = owner_id and self_id and str(owner_id) == str(self_id)
                     
-                    # 只有房主才显示"开始游戏"按钮
-                    if is_owner and ui.get("start_btn"): ui["start_btn"].draw(screen)
+                    # 显示“开始游戏”按钮（非房主点击后由服务器拒绝）
+                    if ui.get("start_btn"): ui["start_btn"].draw(screen)
                     if ui.get("leave_btn"): ui["leave_btn"].draw(screen)
                     for btn in ui.get("kick_buttons", []):
                         btn.draw(screen)
