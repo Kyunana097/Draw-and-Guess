@@ -62,4 +62,4 @@ assets/cache/
 server.log
 client.log
 game_data.db
-
+settings.json
