@@ -42,6 +42,9 @@ class Canvas:
         
         # 绘画同步回调
         self.on_draw_action: Optional[Callable[[Dict[str, Any]], None]] = None  # 绘画动作回调
+        
+        # 绘画权限
+        self.drawing_enabled: bool = True  # 是否允许绘画
 
     def to_local(self, pos: Tuple[int, int]) -> Tuple[int, int]:
         """将屏幕坐标转换为画布本地坐标
@@ -144,6 +147,10 @@ class Canvas:
         Args:
             event: pygame 事件对象
         """
+        # 如果禁用绘画，则不处理鼠标事件
+        if not self.drawing_enabled:
+            return
+            
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
             # 左键按下：检查点击是否在画布区域内
             if self.rect.collidepoint(event.pos):

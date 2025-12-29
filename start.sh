@@ -44,6 +44,7 @@ case $choice in
     1)
         echo "🚀 启动服务器..."
         free_port
+        echo "📡 本机IP地址: $(hostname -I)"
         HOST=0.0.0.0 PORT=5555 python src/server/main.py
         ;;
     2)

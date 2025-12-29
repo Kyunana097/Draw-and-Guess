@@ -21,7 +21,10 @@ from src.shared.constants import (
     MSG_LEAVE_ROOM,
     MSG_KICK_PLAYER,
     MSG_START_GAME,
-    MSG_DRAW
+    MSG_DRAW,
+    MSG_SET_GAME_CONFIG,
+    MSG_GIVE_SCORE,
+    MSG_NEXT_ROUND
 )
 from src.shared.protocols import Message
 
@@ -53,14 +56,19 @@ class NetworkClient:
         self.player_name = player_name or "玩家"
         try:
             self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            # 设置连接超时
+            self.sock.settimeout(5.0)
             self.sock.connect((self.host, self.port))
+            # 连接成功后取消超时，使用非阻塞模式接收
+            self.sock.settimeout(None)
             self._running.set()
             self._recv_thread = threading.Thread(target=self._recv_loop, daemon=True)
             self._recv_thread.start()
             # 注册
             self._send(Message(MSG_CONNECT, {"player_id": self.player_id, "name": self.player_name}))
             return True
-        except OSError:
+        except (OSError, socket.timeout) as e:
+            print(f"连接失败: {e}")
             self.close()
             return False
 
@@ -81,6 +89,25 @@ class NetworkClient:
 
     def start_game(self) -> None:
         self._send(Message(MSG_START_GAME, {}))
+
+    def set_game_config(self, max_rounds: int = None, round_time: int = None, rest_time: int = None) -> None:
+        """设置游戏参数"""
+        config = {}
+        if max_rounds is not None:
+            config["max_rounds"] = max_rounds
+        if round_time is not None:
+            config["round_time"] = round_time
+        if rest_time is not None:
+            config["rest_time"] = rest_time
+        self._send(Message(MSG_SET_GAME_CONFIG, config))
+
+    def give_score(self, player_id: str, score: int) -> None:
+        """给玩家打分（仅绘画者可用）"""
+        self._send(Message(MSG_GIVE_SCORE, {"player_id": player_id, "score": score}))
+
+    def next_round(self) -> None:
+        """开始下一轮"""
+        self._send(Message(MSG_NEXT_ROUND, {}))
 
     def send_chat(self, text: str) -> None:
         if not text:
