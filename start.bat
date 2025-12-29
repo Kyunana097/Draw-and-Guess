@@ -2,68 +2,66 @@
 chcp 65001 >nul
 setlocal enabledelayedexpansion
 
-echo Draw and Guess Game Launcher
-echo ================================
-echo.
+REM 快速启动脚本 (Windows)
 
-REM Check virtual environment
+echo 🎨 Draw ^& Guess 游戏启动脚本
+echo ================================
+
+REM 检查虚拟环境
 if not exist "venv" (
-    echo [INFO] Creating virtual environment...
-    py -m venv venv
+    echo ❌ 虚拟环境不存在，正在创建...
+    python -m venv venv
     if errorlevel 1 (
-        echo [ERROR] Failed to create virtual environment
+        echo ❌ 虚拟环境创建失败
         pause
         exit /b 1
     )
-    echo [OK] Virtual environment created
+    echo ✅ 虚拟环境创建完成
 )
 
-REM Set paths
+REM 设置路径
 set "PYTHON=venv\Scripts\python.exe"
 set "PIP=venv\Scripts\pip.exe"
 
-REM Check if Python exists in venv
-if not exist "%PYTHON%" (
-    echo [ERROR] Python not found in virtual environment
-    pause
-    exit /b 1
-)
-
-REM Install dependencies
-echo.
-echo [INFO] Installing dependencies...
+REM 检查依赖
+echo 📦 检查依赖...
 "%PIP%" install -q -r requirements.txt
-if errorlevel 1 (
-    echo [WARNING] Some dependencies may not be installed correctly
-)
 
-REM Menu
+REM 选择启动模式
 echo.
-echo Select mode:
-echo [1] Start Server
-echo [2] Start Client
-echo [3] Start Server and Client
-echo [4] Run Tests
-echo.
-set /p choice="Enter option (1-4): "
+echo 请选择启动模式:
+echo 1) 启动服务器
+echo 2) 启动客户端
+echo 3) 同时启动服务器和客户端
+echo 4) 运行测试
+set /p choice="输入选项 (1-4): "
+
+REM 释放占用端口的函数
+set "FREE_PORT=for /f %%p in ('netstat -ano ^| findstr :5555 ^| findstr LISTENING') do @for /f "tokens=5" %%a in ("%%p") do @taskkill /F /PID %%a >nul 2>&1"
 
 if "%choice%"=="1" (
     echo.
-    echo [INFO] Starting server...
+    echo 🚀 启动服务器...
+    REM 释放端口
+    %FREE_PORT%
     "%PYTHON%" src\server\main.py
 ) else if "%choice%"=="2" (
     echo.
-    echo [INFO] Starting client...
+    echo 🚀 启动客户端...
     "%PYTHON%" src\client\main.py
 ) else if "%choice%"=="3" (
     echo.
-    echo [INFO] Starting server and client...
+    echo 🚀 启动服务器和客户端...
+    REM 释放端口
+    %FREE_PORT%
     start "Draw-and-Guess Server" "%PYTHON%" src\server\main.py
     timeout /t 2 /nobreak >nul
     "%PYTHON%" src\client\main.py
+    REM 客户端退出后，清理后台服务器
+    for /f "tokens=2" %%i in ('tasklist /fi "WINDOWTITLE eq Draw-and-Guess Server" /fo list ^| findstr "PID:"') do taskkill /PID %%i /F >nul 2>&1
 ) else if "%choice%"=="4" (
     echo.
-    echo [INFO] Running tests...
+    echo 🧪 运行测试...
     if exist "venv\Scripts\pytest.exe" (
         venv\Scripts\pytest.exe -v
     ) else (
@@ -71,7 +69,7 @@ if "%choice%"=="1" (
     )
 ) else (
     echo.
-    echo [ERROR] Invalid option
+    echo ❌ 无效选项
     pause
     exit /b 1
 )
