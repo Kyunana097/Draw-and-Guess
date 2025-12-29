@@ -540,7 +540,6 @@ def build_room_list_ui(screen_size: tuple) -> Dict[str, Any]:
     def _on_refresh():
         net = get_network_client()
         if net.connect(APP_STATE["settings"]["player_name"], APP_STATE["settings"].get("player_id")):
-            add_notification("已请求房间列表", color=(50, 150, 220))
             net.list_rooms()
         else:
             add_notification("无法连接服务器，检查地址与端口", color=(200, 60, 60))
@@ -653,7 +652,7 @@ def process_network_messages(ui: Optional[Dict[str, Any]]) -> None:
                 APP_STATE["rooms"] = data.get("rooms", [])
                 if APP_STATE["screen"] == "room_list":
                     APP_STATE["ui"] = None
-                add_notification(f"房间列表已更新，共 {len(APP_STATE['rooms'])} 个房间", color=(50, 150, 220))
+                # 不显示通知，UI 更新本身就是反馈
             elif event == MSG_CREATE_ROOM and data.get("ok"):
                 APP_STATE["screen"] = "lobby"
                 APP_STATE["ui"] = None
@@ -670,7 +669,7 @@ def process_network_messages(ui: Optional[Dict[str, Any]]) -> None:
                 APP_STATE["ui"] = None
                 APP_STATE["current_room"] = None
                 net.list_rooms()
-                add_notification("已离开房间，返回房间列表", color=(50, 150, 220))
+                # 不显示额外通知，返回房间列表本身就是反馈
             continue
 
         # 房间状态更新（兼容老的 room_state）
@@ -683,19 +682,21 @@ def process_network_messages(ui: Optional[Dict[str, Any]]) -> None:
                 APP_STATE["ui"] = None
             continue
 
-        # 游戏事件
-        if msg.type == MSG_START_GAME and data.get("ok"):
-            APP_STATE["screen"] = "play"
-            APP_STATE["ui"] = None
-            continue
-
-        if msg.type == MSG_KICK_PLAYER:
-            APP_STATE["screen"] = "room_list"
-            APP_STATE["ui"] = None
-            APP_STATE["current_room"] = None
-            add_notification("你被踢出了房间", color=(200, 50, 50))
-            net.list_rooms()
-            continue
+        # 服务器发送的 event 类型消息（游戏事件）
+        if msg.type == "event":
+            event_type = data.get("type")
+            if event_type == MSG_START_GAME and data.get("ok"):
+                APP_STATE["screen"] = "play"
+                APP_STATE["ui"] = None
+                add_notification("游戏开始！", color=(50, 200, 50))
+                continue
+            if event_type == MSG_KICK_PLAYER:
+                APP_STATE["screen"] = "room_list"
+                APP_STATE["ui"] = None
+                APP_STATE["current_room"] = None
+                add_notification("你被踢出了房间", color=(200, 50, 50))
+                net.list_rooms()
+                continue
 
         # 聊天
         if msg.type == MSG_CHAT and ui and "chat" in ui:

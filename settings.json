@@ -1,10 +1,9 @@
 {
-  "player_name": "kyunana1",
+  "player_name": "Kyunana",
   "difficulty": "普通",
   "volume": 52,
   "theme": "light",
   "fullscreen": false,
-  "player_id": "0603892b-c5de-4224-be78-b82c0cc768c6",
   "server_host": "127.0.0.1",
   "server_port": 5555
 }
