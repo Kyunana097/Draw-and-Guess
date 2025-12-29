@@ -9,6 +9,8 @@ import sys
 from pathlib import Path
 import math
 import uuid
+import os
+import subprocess
 from typing import Any, Callable, Dict, List, Optional
 
 # 添加项目根目录到路径（保留以便直接运行脚本时能找到包）
@@ -24,7 +26,7 @@ logger = logging.getLogger(__name__)
 from src.shared.constants import (
     WINDOW_HEIGHT, WINDOW_TITLE, WINDOW_WIDTH,
     MSG_CREATE_ROOM, MSG_JOIN_ROOM, MSG_LIST_ROOMS, MSG_KICK_PLAYER, MSG_START_GAME, MSG_ROOM_UPDATE, MSG_LEAVE_ROOM,
-    MSG_CHAT,
+    MSG_CHAT, MSG_NEXT_ROUND, MSG_GIVE_SCORE, MSG_GAME_RESULT,
     DEFAULT_HOST, DEFAULT_PORT
 )
 from src.client.network import NetworkClient
@@ -135,6 +137,47 @@ def get_network_client() -> NetworkClient:
         net = NetworkClient(host=shost, port=sport)
         APP_STATE["net"] = net
     return net
+
+
+def detect_local_ip() -> str:
+    """检测本机可用于局域网连接的 IPv4 地址。
+
+    优先使用 UDP 套接字连接外部地址的方式，获取本机出口 IP；
+    失败则回退到 127.0.0.1。
+    """
+    try:
+        import socket
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        # 不会真的发送，但可得到本机选择的出站 IP
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip or "127.0.0.1"
+    except Exception:
+        return "127.0.0.1"
+
+
+def start_local_server(port: int = 5555) -> bool:
+    """在本机后台启动服务器进程（HOST=0.0.0.0）。
+
+    返回是否成功启动。保存进程对象到 APP_STATE，以便后续管理。
+    """
+    try:
+        server_path = Path(__file__).parent.parent.parent / "server-deploy" / "server.py"
+        if not server_path.exists():
+            add_notification("未找到服务器脚本 server-deploy/server.py", color=(200, 60, 60))
+            return False
+        env = os.environ.copy()
+        env["HOST"] = "0.0.0.0"
+        env["PORT"] = str(port)
+        # 使用当前 Python 可执行文件启动，防止虚拟环境不一致
+        proc = subprocess.Popen([sys.executable, str(server_path)], env=env)
+        APP_STATE["_local_server_proc"] = proc
+        add_notification(f"本地服务器已启动，端口 {port}", color=(60, 160, 220))
+        return True
+    except Exception as e:
+        add_notification(f"启动本地服务器失败: {e}", color=(200, 60, 60))
+        return False
 
 
 def load_logo(path: Path, screen_size: tuple):
@@ -568,6 +611,59 @@ def build_settings_ui(screen_size: tuple, confirm_sound: Optional[pygame.mixer.S
         _update_server_host(server_host_input.text)
     confirm_host_btn.on_click = _on_confirm_host
 
+    # 局域网按钮：自动检测本机IP、填入并可继续修改；必要时启动本地服务器
+    lan_btn = Button(
+        x=confirm_btn_x,
+        y=row3_y + input_h + 12,
+        width=max(120, int(input_w * 0.42)),
+        height=input_h,
+        text="局域网",
+        bg_color=(80, 150, 200),
+        fg_color=(255, 255, 255),
+        hover_bg_color=(90, 170, 220),
+        font_size=20,
+        font_name="Microsoft YaHei",
+        click_sound=confirm_sound,
+    )
+    def _on_lan():
+        ip = detect_local_ip()
+        # 填入输入框，便于用户进一步修改
+        try:
+            server_host_input.text = ip
+        except Exception:
+            pass
+        _update_server_host(ip)
+        # 若本地尚未启动服务器，则尝试启动
+        proc = APP_STATE.get("_local_server_proc")
+        if not proc or (hasattr(proc, "poll") and proc.poll() is not None):
+            start_local_server(APP_STATE["settings"].get("server_port", 5555))
+        else:
+            add_notification("本地服务器已运行", color=(60, 160, 220))
+    lan_btn.on_click = _on_lan
+
+    # 服务器按钮：直接设置为远程固定地址
+    remote_btn = Button(
+        x=confirm_btn_x + max(130, int(input_w * 0.46)) + 10,
+        y=row3_y + input_h + 12,
+        width=max(120, int(input_w * 0.42)),
+        height=input_h,
+        text="服务器",
+        bg_color=(50, 180, 80),
+        fg_color=(255, 255, 255),
+        hover_bg_color=(70, 200, 100),
+        font_size=20,
+        font_name="Microsoft YaHei",
+        click_sound=confirm_sound,
+    )
+    def _on_remote():
+        # 预填入远程地址，仍可在输入框中修改
+        try:
+            server_host_input.text = "81.68.144.16"
+        except Exception:
+            pass
+        _update_server_host("81.68.144.16")
+    remote_btn.on_click = _on_remote
+
     # 主题与全屏按钮由配置创建并在主循环中附加到 UI
 
     # 快捷键说明已移除（快捷键仍然存在于运行时，但不在设置界面展示）
@@ -577,6 +673,8 @@ def build_settings_ui(screen_size: tuple, confirm_sound: Optional[pygame.mixer.S
         "confirm_name_btn": confirm_name_btn,
         "server_host_input": server_host_input,
         "confirm_host_btn": confirm_host_btn,
+        "server_lan_btn": lan_btn,
+        "server_remote_btn": remote_btn,
         # difficulty buttons removed
         "volume_slider_rect": volume_slider_rect,
         # theme/fullscreen buttons attached from config
@@ -594,8 +692,10 @@ def build_room_list_ui(screen_size: tuple) -> Dict[str, Any]:
         font_name="Microsoft YaHei", font_size=20
     )
     def _on_refresh():
+        # 确保本地拥有唯一的 player_id（用于识别房主）
+        player_id = APP_STATE["settings"].get("player_id") or ensure_player_identity()
         net = get_network_client()
-        if net.connect(APP_STATE["settings"]["player_name"], APP_STATE["settings"].get("player_id")):
+        if net.connect(APP_STATE["settings"]["player_name"], player_id):
             net.list_rooms()
         else:
             add_notification("无法连接服务器，检查地址与端口", color=(200, 60, 60))
@@ -613,13 +713,26 @@ def build_room_list_ui(screen_size: tuple) -> Dict[str, Any]:
             net = get_network_client()
             logger.info(f"网络客户端: host={net.host}, port={net.port}, connected={net.connected}")
             player_name = APP_STATE["settings"].get("player_name", "玩家")
-            player_id = APP_STATE["settings"].get("player_id")
+            # 确保存在唯一 player_id（用于服务器端认定房主）
+            player_id = APP_STATE["settings"].get("player_id") or ensure_player_identity()
             logger.info(f"尝试连接: player_name={player_name}, player_id={player_id}")
             if net.connect(player_name, player_id):
                 logger.info("连接成功，发送创建房间请求")
                 add_notification("正在创建房间...", color=(50, 180, 80))
                 net.create_room(f"{player_name}的房间")
                 # 立即切到大厅，等待服务器确认，提升可见性
+                # 预填充最小房间状态，先显示本地玩家列表，待服务器广播覆盖
+                try:
+                    APP_STATE["current_room"] = {
+                        "room_id": None,
+                        "status": "waiting",
+                        "owner_id": player_id,
+                        "players": {
+                            str(player_id): {"name": player_name, "score": 0}
+                        }
+                    }
+                except Exception:
+                    pass
                 APP_STATE["screen"] = "lobby"
                 APP_STATE["ui"] = None
                 add_notification("等待服务器确认进入大厅...", color=(120, 120, 220))
@@ -655,6 +768,27 @@ def build_room_list_ui(screen_size: tuple) -> Dict[str, Any]:
     }
 
 
+def build_result_ui(screen_size: tuple) -> Dict[str, Any]:
+    """构建游戏结果界面"""
+    sw, sh = screen_size
+    
+    # 返回大厅按钮
+    back_btn = Button(
+        x=sw // 2 - 80, y=sh - 100, width=160, height=45,
+        text="返回大厅", bg_color=(50, 150, 200), fg_color=(255, 255, 255),
+        font_name="Microsoft YaHei", font_size=22
+    )
+    def _on_back():
+        APP_STATE["screen"] = "lobby"
+        APP_STATE["ui"] = None
+        APP_STATE["game_result"] = None
+    back_btn.on_click = _on_back
+    
+    return {
+        "back_btn": back_btn,
+    }
+
+
 def build_lobby_ui(screen_size: tuple) -> Dict[str, Any]:
     sw, sh = screen_size
     
@@ -682,11 +816,96 @@ def build_lobby_ui(screen_size: tuple) -> Dict[str, Any]:
         APP_STATE["ui"] = None
         net.list_rooms()
     leave_btn.on_click = _on_leave
+    
+    # 游戏设置输入框（仅房主可见）
+    rounds_input = TextInput(
+        rect=pygame.Rect(sw // 2 - 250, sh - 200, 120, 35),
+        font_name="Microsoft YaHei",
+        font_size=18,
+        placeholder="3"
+    )
+    rounds_input.text = "3"
+    
+    time_input = TextInput(
+        rect=pygame.Rect(sw // 2 - 50, sh - 200, 120, 35),
+        font_name="Microsoft YaHei",
+        font_size=18,
+        placeholder="60"
+    )
+    time_input.text = "60"
+    
+    rest_input = TextInput(
+        rect=pygame.Rect(sw // 2 + 150, sh - 200, 120, 35),
+        font_name="Microsoft YaHei",
+        font_size=18,
+        placeholder="10"
+    )
+    rest_input.text = "10"
+    
+    # 应用设置按钮
+    apply_btn = Button(
+        x=sw // 2 - 60, y=sh - 150, width=120, height=35,
+        text="应用设置", bg_color=(80, 150, 200), fg_color=(255, 255, 255),
+        font_name="Microsoft YaHei", font_size=18
+    )
+    def _on_apply_settings():
+        try:
+            max_rounds = int(rounds_input.text or "3")
+            round_time = int(time_input.text or "60")
+            rest_time = int(rest_input.text or "10")
+            net = get_network_client()
+            net.set_game_config(max_rounds, round_time, rest_time)
+            add_notification(f"设置已更新: {max_rounds}轮, {round_time}秒/轮, {rest_time}秒休息", color=(50, 180, 80))
+        except ValueError:
+            add_notification("请输入有效的数字", color=(200, 60, 60))
+    apply_btn.on_click = _on_apply_settings
+    
+    # 聊天面板（放置在大厅底部，横向铺满，避免遮挡玩家列表）
+    pad = 20
+    chat_h = max(140, int(sh * 0.22))
+    chat_rect = pygame.Rect(pad, sh - chat_h - pad, sw - pad * 2, chat_h)
+    chat = ChatPanel(chat_rect)
+    
+    # 聊天输入框
+    chat_input_w = max(240, chat_rect.width - 100)
+    # 将输入框与发送按钮保持在窗口内，紧贴聊天面板底部
+    chat_input_y = chat_rect.bottom - 35 - 8
+    chat_input = TextInput(
+        rect=pygame.Rect(chat_rect.x, chat_input_y, chat_input_w, 35),
+        font_name="Microsoft YaHei",
+        font_size=16,
+        placeholder="输入消息..."
+    )
+    
+    # 发送按钮
+    send_btn = Button(
+        x=chat_rect.right - 80, y=chat_input_y,
+        width=70, height=35,
+        text="发送", bg_color=(50, 150, 200), fg_color=(255, 255, 255),
+        font_name="Microsoft YaHei", font_size=16
+    )
+    def _on_send():
+        msg = chat_input.text.strip()
+        if msg:
+            net = get_network_client()
+            if net and net.connected:
+                net.send_chat(msg)
+            chat.add_message("你", msg)
+            chat_input.text = ""
+    send_btn.on_click = _on_send
+    chat_input.on_submit = lambda text: _on_send()
 
     return {
         "start_btn": start_btn,
         "leave_btn": leave_btn,
-        "kick_buttons": [] # Dynamic
+        "kick_buttons": [],  # Dynamic
+        "rounds_input": rounds_input,
+        "time_input": time_input,
+        "rest_input": rest_input,
+        "apply_btn": apply_btn,
+        "chat": chat,
+        "chat_input": chat_input,
+        "send_btn": send_btn,
     }
 
 
@@ -712,9 +931,38 @@ def process_network_messages(ui: Optional[Dict[str, Any]]) -> None:
             elif event == MSG_CREATE_ROOM and data.get("ok"):
                 APP_STATE["screen"] = "lobby"
                 APP_STATE["ui"] = None
+                # 预填充房间状态，等待服务器广播覆盖
+                try:
+                    self_id = APP_STATE.get("settings", {}).get("player_id")
+                    room_id = data.get("room_id")
+                    player_name = APP_STATE["settings"].get("player_name", "玩家")
+                    APP_STATE["current_room"] = {
+                        "room_id": room_id,
+                        "owner_id": self_id,
+                        "status": "waiting",
+                        "players": {
+                            str(self_id): {"name": player_name, "score": 0}
+                        }
+                    }
+                except Exception:
+                    pass
                 add_notification("房间创建成功，已进入大厅", color=(50, 180, 80))
             elif event == MSG_JOIN_ROOM:
                 if data.get("ok"):
+                    # 预填充当前房间的最小状态，等待服务器广播覆盖
+                    try:
+                        self_id = APP_STATE.get("settings", {}).get("player_id")
+                        room_id = data.get("room_id")
+                        player_name = APP_STATE["settings"].get("player_name", "玩家")
+                        APP_STATE["current_room"] = {
+                            "room_id": room_id,
+                            "status": "waiting",
+                            "players": {
+                                str(self_id): {"name": player_name, "score": 0}
+                            }
+                        }
+                    except Exception:
+                        pass
                     APP_STATE["screen"] = "lobby"
                     APP_STATE["ui"] = None
                     add_notification("加入房间成功，已进入大厅", color=(50, 180, 80))
@@ -731,6 +979,19 @@ def process_network_messages(ui: Optional[Dict[str, Any]]) -> None:
         # 房间状态更新（兼容老的 room_state）
         if msg.type == MSG_ROOM_UPDATE or msg.type == "room_state":
             APP_STATE["current_room"] = data
+            
+            # 更新 HUD 中的词语和绘者状态
+            if APP_STATE["screen"] == "play" and ui and "hud" in ui:
+                hud = ui["hud"]
+                player_id = APP_STATE["settings"].get("player_id")
+                drawer_id = data.get("drawer_id")
+                hud["is_drawer"] = (player_id == drawer_id)
+                # 如果是绘者，显示词语；否则词语为 None（会显示"隐藏"）
+                if hud["is_drawer"]:
+                    hud["current_word"] = data.get("current_word")
+                else:
+                    hud["current_word"] = None
+            
             if APP_STATE["screen"] == "lobby":
                 APP_STATE["ui"] = None
             if data.get("status") == "playing" and APP_STATE["screen"] == "lobby":
@@ -744,7 +1005,29 @@ def process_network_messages(ui: Optional[Dict[str, Any]]) -> None:
             if event_type == MSG_START_GAME and data.get("ok"):
                 APP_STATE["screen"] = "play"
                 APP_STATE["ui"] = None
-                add_notification("游戏开始！", color=(50, 200, 50))
+                drawer_name = data.get("drawer_name", "某人")
+                round_num = data.get("round", 1)
+                max_rounds = data.get("max_rounds", 3)
+                add_notification(f"游戏开始！第{round_num}/{max_rounds}轮，{drawer_name}是绘画者", color=(50, 200, 50))
+                continue
+            if event_type == MSG_NEXT_ROUND:
+                drawer_name = data.get("drawer_name", "某人")
+                round_num = data.get("round", 1)
+                max_rounds = data.get("max_rounds", 3)
+                add_notification(f"第{round_num}/{max_rounds}轮开始，{drawer_name}是绘画者", color=(80, 150, 200))
+                # 清空画布
+                if ui and "canvas" in ui:
+                    ui["canvas"].clear()
+                continue
+            if event_type == "guess_correct":
+                player_name = data.get("player_name", "某人")
+                word = data.get("word", "")
+                add_notification(f"🎉 {player_name} 猜对了：{word}！", color=(50, 200, 50))
+                continue
+            if event_type == MSG_GIVE_SCORE:
+                player_name = data.get("player_name", "某人")
+                score = data.get("score", 0)
+                add_notification(f"{player_name} 获得 {score} 分", color=(80, 150, 200))
                 continue
             if event_type == MSG_KICK_PLAYER:
                 APP_STATE["screen"] = "room_list"
@@ -754,16 +1037,24 @@ def process_network_messages(ui: Optional[Dict[str, Any]]) -> None:
                 net.list_rooms()
                 continue
 
+        # 游戏结果
+        if msg.type == MSG_GAME_RESULT:
+            APP_STATE["game_result"] = data.get("ranking", [])
+            APP_STATE["screen"] = "result"
+            APP_STATE["ui"] = None
+            add_notification("游戏结束！查看最终排名", color=(200, 150, 50))
+            continue
+
         # 聊天
         if msg.type == MSG_CHAT and ui and "chat" in ui:
             by_id = data.get("by") or data.get("by_id")
             name = data.get("by_name") or by_id or "玩家"
+            # 跳过自己发送的消息（因为已经在本地显示了）
             if by_id and self_id and str(by_id) == str(self_id):
                 continue
-            label = "你" if by_id and self_id and str(by_id) == str(self_id) else name
             text = str(data.get("text") or "").replace("\n", " ")
             try:
-                ui["chat"].add_message(label, text)
+                ui["chat"].add_message(name, text)
             except Exception:
                 pass
         elif msg.type == "draw_sync":
@@ -786,6 +1077,12 @@ def process_network_messages(ui: Optional[Dict[str, Any]]) -> None:
                     hud["round_time_left"] = data.get("time_left", hud.get("round_time_left", 60))
                 except Exception:
                     pass
+
+        # 错误反馈
+        if msg.type == "error":
+            err = data.get("msg") or "操作失败"
+            add_notification(f"错误: {err}", color=(200, 60, 60))
+            continue
 
 
 def update_and_draw_hud(screen: pygame.Surface, ui: Dict[str, Any]) -> None:
@@ -817,9 +1114,14 @@ def update_and_draw_hud(screen: pygame.Surface, ui: Dict[str, Any]) -> None:
     time_txt = font.render(f"剩余时间: {t_left}s", True, (60, 60, 60))
     screen.blit(time_txt, (rect.x + 12, rect.y + (top_h - time_txt.get_height()) // 2))
 
-    # 当前词（作为画手预览）
-    word = hud.get("current_word") or "(未选择)"
-    word_txt = font.render(f"当前词: {word}", True, (60, 60, 60))
+    # 当前词（仅绘者看得见，其他玩家隐藏）
+    is_drawer = hud.get("is_drawer", False)
+    if is_drawer:
+        word = hud.get("current_word") or "(未选择)"
+        word_display = f"当前词: {word}"
+    else:
+        word_display = "当前词: (隐藏)"  # 非绘者看不到词语
+    word_txt = font.render(word_display, True, (60, 60, 60))
     screen.blit(word_txt, (time_txt.get_rect(topleft=(rect.x + 12, rect.y)).right + 24, rect.y + (top_h - word_txt.get_height()) // 2))
 
     # 模式与画笔
@@ -870,11 +1172,20 @@ def main() -> None:
                 confirm_sound = pygame.mixer.Sound(str(CONFIRM_SOUND_PATH))
             except Exception as e:
                 logger.warning(f"加载确认音效失败: {e}")
+        # 应用音量到音效
+        try:
+            vol = float(APP_STATE["settings"].get("volume", 80)) / 100.0
+            if confirm_sound:
+                confirm_sound.set_volume(max(0.0, min(1.0, vol)))
+        except Exception:
+            pass
+        # 将音效保存到全局状态以便设置界面动态调整
+        APP_STATE["confirm_sound"] = confirm_sound
 
         # Create a window or fullscreen depending on saved settings
         flags = pygame.RESIZABLE
         if APP_STATE["settings"].get("fullscreen"):
-            flags = pygame.FULLSCREEN
+            flags = pygame.FULLSCREEN_DESKTOP
             screen = pygame.display.set_mode((0, 0), flags)
         else:
             screen = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT), flags)
@@ -909,7 +1220,7 @@ def main() -> None:
             save_settings()
             try:
                 if new:
-                    screen = pygame.display.set_mode((0, 0), pygame.FULLSCREEN)
+                    screen = pygame.display.set_mode((0, 0), pygame.FULLSCREEN_DESKTOP)
                 else:
                     screen = pygame.display.set_mode((1280, 720), pygame.RESIZABLE)
                 logo_orig, logo_base_size, logo_anchor = load_logo(LOGO_PATH, screen.get_size())
@@ -978,18 +1289,17 @@ def main() -> None:
                                 elif cid == "play_send":
                                     ui["send_btn"] = pb
                             APP_STATE["ui"] = ui
-                            # 确保网络连接并加入房间
-                            player_id = ensure_player_identity()
-                            net = get_network_client()
-                            if not net.connected:
-                                ok = net.connect(APP_STATE["settings"].get("player_name", "玩家"), player_id, room_id="default")
-                                try:
-                                    if ok:
-                                        ui["chat"].add_message("系统", "已连接到服务器，已加入房间 default")
-                                    else:
-                                        ui["chat"].add_message("系统", "无法连接到服务器，聊天仅本地显示")
-                                except Exception:
-                                    pass
+                        
+                        # 更新画布权限：只有绘画者可以绘画
+                        current_room = APP_STATE.get("current_room") or {}
+                        drawer_id = current_room.get("drawer_id")
+                        self_id = APP_STATE.get("settings", {}).get("player_id")
+                        is_drawer = drawer_id and self_id and str(drawer_id) == str(self_id)
+                        
+                        if "canvas" in ui:
+                            ui["canvas"].drawing_enabled = is_drawer
+                        if "hud" in ui:
+                            ui["hud"]["is_drawer"] = is_drawer
 
                         # 处理按钮事件
                         if ui.get("back_btn"):
@@ -998,7 +1308,25 @@ def main() -> None:
                             ui["send_btn"].handle_event(event)
 
                         # 先处理鼠标事件到组件（工具栏、画布、输入框）
-                        if event.type == pygame.MOUSEBUTTONDOWN or event.type == pygame.MOUSEMOTION:
+                        if event.type == pygame.MOUSEBUTTONDOWN:
+                            # 检查是否点击下一轮按钮
+                            current_room = APP_STATE.get("current_room") or {}
+                            drawer_id = current_room.get("drawer_id")
+                            self_id = APP_STATE.get("settings", {}).get("player_id")
+                            is_drawer = drawer_id and self_id and str(drawer_id) == str(self_id)
+                            
+                            if is_drawer and event.button == 1:
+                                sw, sh = screen.get_size()
+                                next_round_btn_rect = pygame.Rect(sw - 220, sh - 80, 180, 40)
+                                if next_round_btn_rect.collidepoint(event.pos):
+                                    net = get_network_client()
+                                    net.next_round()
+                                    add_notification("请求开始下一轮", color=(80, 180, 120))
+                            
+                            ui["toolbar"].handle_event(event)
+                            ui["canvas"].handle_event(event)
+                            ui["input"].handle_event(event)
+                        elif event.type == pygame.MOUSEMOTION:
                             ui["toolbar"].handle_event(event)
                             ui["canvas"].handle_event(event)
                             ui["input"].handle_event(event)
@@ -1127,16 +1455,39 @@ def main() -> None:
                                     idx += 1
                             ui["kick_buttons"] = kick_buttons
 
-                        # 只有房主才能点击"开始游戏"
+                        # 开始游戏按钮对所有人可点击，服务器侧仍做权限校验
+                        if ui.get("start_btn"): ui["start_btn"].handle_event(event)
+
+                        # 仅房主可编辑游戏参数
                         current_room = APP_STATE.get("current_room") or {}
                         owner_id = current_room.get("owner_id")
                         self_id = APP_STATE.get("settings", {}).get("player_id")
                         is_owner = owner_id and self_id and str(owner_id) == str(self_id)
+                        if is_owner:
+                            if ui.get("rounds_input"): ui["rounds_input"].handle_event(event)
+                            if ui.get("time_input"): ui["time_input"].handle_event(event)
+                            if ui.get("rest_input"): ui["rest_input"].handle_event(event)
+                            if ui.get("apply_btn"): ui["apply_btn"].handle_event(event)
                         
-                        if is_owner and ui.get("start_btn"): ui["start_btn"].handle_event(event)
                         if ui.get("leave_btn"): ui["leave_btn"].handle_event(event)
+                        if ui.get("chat_input"): ui["chat_input"].handle_event(event)
+                        if ui.get("send_btn"): ui["send_btn"].handle_event(event)
+                        # 聊天框滚轮
+                        if event.type == pygame.MOUSEWHEEL and ui.get("chat"):
+                            try:
+                                chat_rect = ui["chat"].rect
+                                mouse_pos = pygame.mouse.get_pos()
+                                if chat_rect.collidepoint(mouse_pos):
+                                    ui["chat"].handle_scroll(event.y)
+                            except Exception:
+                                pass
                         for btn in ui.get("kick_buttons", []):
                             btn.handle_event(event)
+                    
+                    elif APP_STATE["screen"] == "result":
+                        ui = APP_STATE["ui"]
+                        if ui and ui.get("back_btn"):
+                            ui["back_btn"].handle_event(event)
 
                     elif APP_STATE["screen"] == "settings":
                         ui = APP_STATE["ui"]
@@ -1162,7 +1513,7 @@ def main() -> None:
                             ui["server_host_input"].handle_event(event)
 
                         # 处理按钮事件
-                        for btn_key in ["back_btn", "light_btn", "dark_btn", "fullscreen_btn", "confirm_name_btn", "confirm_host_btn"]:
+                        for btn_key in ["back_btn", "light_btn", "dark_btn", "fullscreen_btn", "confirm_name_btn", "confirm_host_btn", "server_lan_btn", "server_remote_btn"]:
                             if ui.get(btn_key):
                                 ui[btn_key].handle_event(event)
 
@@ -1173,6 +1524,13 @@ def main() -> None:
                                 vol = max(0, min(100, int(rel_x / ui["volume_slider_rect"].width * 100)))
                                 APP_STATE["settings"]["volume"] = vol
                                 save_settings()
+                                # 动态调整点击音效音量
+                                try:
+                                    snd = APP_STATE.get("confirm_sound")
+                                    if snd:
+                                        snd.set_volume(vol / 100.0)
+                                except Exception:
+                                    pass
 
             if APP_STATE["screen"] == "play":
                 process_network_messages(APP_STATE.get("ui"))
@@ -1185,8 +1543,13 @@ def main() -> None:
             pending_size = APP_STATE.get("pending_resize_size")
             if pending_size and now_tick >= pending_until:
                 # finalize resize handling once: set display mode once and rebuild UI
+                # 保留全屏状态，不要在resize时强制改变全屏标志
                 try:
-                    screen = pygame.display.set_mode(pending_size, pygame.RESIZABLE)
+                    is_fullscreen = bool(APP_STATE["settings"].get("fullscreen", False))
+                    if is_fullscreen:
+                        screen = pygame.display.set_mode(pending_size, pygame.FULLSCREEN_DESKTOP)
+                    else:
+                        screen = pygame.display.set_mode(pending_size, pygame.RESIZABLE)
                 except Exception:
                     pass
                 try:
@@ -1261,8 +1624,12 @@ def main() -> None:
                             ui["send_btn"] = pb
                     APP_STATE["ui"] = ui
 
-                # 游戏背景色
-                screen.fill((250, 250, 252))  # 淡灰白色
+                # 根据主题绘制背景
+                theme = APP_STATE["settings"].get("theme", "light")
+                if theme == "dark":
+                    screen.fill((28, 30, 35))
+                else:
+                    screen.fill((250, 250, 252))
 
                 # 渲染各组件
                 update_and_draw_hud(screen, ui)
@@ -1274,9 +1641,78 @@ def main() -> None:
                     ui["send_btn"].draw(screen)
                 if ui.get("back_btn"):
                     ui["back_btn"].draw(screen)
+                
+                # 显示玩家得分排行（右侧）
+                current_room = APP_STATE.get("current_room") or {}
+                players = current_room.get("players", {})
+                if players:
+                    try:
+                        font_score = pygame.font.SysFont("Microsoft YaHei", 20)
+                    except:
+                        font_score = pygame.font.SysFont(None, 20)
+                    
+                    score_x = sw - 220
+                    score_y = 100
+                    
+                    # 标题
+                    title = font_score.render("得分榜", True, (60, 60, 60))
+                    screen.blit(title, (score_x + 50, score_y))
+                    
+                    # 排序玩家
+                    sorted_players = sorted(players.items(), key=lambda x: x[1].get("score", 0), reverse=True)
+                    
+                    for i, (pid, pdata) in enumerate(sorted_players):
+                        name = pdata.get("name", "玩家")
+                        score = pdata.get("score", 0)
+                        drawer_id = current_room.get("drawer_id")
+                        is_drawer = (pid == drawer_id)
+                        
+                        y_pos = score_y + 40 + i * 30
+                        
+                        # 背景
+                        bg_rect = pygame.Rect(score_x, y_pos - 5, 180, 28)
+                        color = (255, 250, 200) if is_drawer else (245, 245, 245)
+                        pygame.draw.rect(screen, color, bg_rect)
+                        pygame.draw.rect(screen, (200, 200, 200), bg_rect, 1)
+                        
+                        # 名字
+                        prefix = "🎨 " if is_drawer else ""
+                        name_txt = font_score.render(f"{prefix}{name}", True, (40, 40, 40))
+                        screen.blit(name_txt, (score_x + 5, y_pos))
+                        
+                        # 分数
+                        score_txt = font_score.render(f"{score}", True, (40, 40, 40))
+                        screen.blit(score_txt, (score_x + 140, y_pos))
+                
+                # 如果是绘画者，显示下一轮按钮
+                drawer_id = current_room.get("drawer_id")
+                self_id = APP_STATE.get("settings", {}).get("player_id")
+                is_drawer = drawer_id and self_id and str(drawer_id) == str(self_id)
+                
+                if is_drawer:
+                    # 下一轮按钮
+                    next_round_btn_rect = pygame.Rect(sw - 220, sh - 80, 180, 40)
+                    pygame.draw.rect(screen, (80, 180, 120), next_round_btn_rect)
+                    pygame.draw.rect(screen, (60, 150, 100), next_round_btn_rect, 2)
+                    
+                    try:
+                        btn_font = pygame.font.SysFont("Microsoft YaHei", 20)
+                    except:
+                        btn_font = pygame.font.SysFont(None, 20)
+                    
+                    btn_txt = btn_font.render("下一轮", True, (255, 255, 255))
+                    screen.blit(btn_txt, (next_round_btn_rect.centerx - btn_txt.get_width() // 2, next_round_btn_rect.centery - btn_txt.get_height() // 2))
+                    
+                    # 处理点击（简单实现）
+                    if "next_round_clicked" not in APP_STATE:
+                        APP_STATE["next_round_clicked"] = False
             elif APP_STATE["screen"] == "room_list":
                 process_network_messages(APP_STATE.get("ui"))
                 ui = APP_STATE["ui"]
+                if ui is None:
+                    ui = build_room_list_ui(screen.get_size())
+                    APP_STATE["ui"] = ui
+                
                 if ui:
                     if ui.get("refresh_btn"): ui["refresh_btn"].draw(screen)
                     if ui.get("create_btn"): ui["create_btn"].draw(screen)
@@ -1295,21 +1731,37 @@ def main() -> None:
             elif APP_STATE["screen"] == "lobby":
                 process_network_messages(APP_STATE.get("ui"))
                 ui = APP_STATE["ui"]
+                if ui is None:
+                    ui = build_lobby_ui(screen.get_size())
+                    APP_STATE["ui"] = ui
+                
                 if ui:
+                    # 背景按主题
+                    theme = APP_STATE["settings"].get("theme", "light")
+                    if theme == "dark":
+                        screen.fill((28, 30, 35))
+                        title_color = (200, 220, 255)
+                        text_color = (220, 220, 220)
+                    else:
+                        screen.fill((240, 242, 250))
+                        title_color = (0, 0, 0)
+                        text_color = (0, 0, 0)
+
+                    sw, sh = screen.get_size()
                     # 检查是否为房主
                     current_room = APP_STATE.get("current_room") or {}
                     owner_id = current_room.get("owner_id")
                     self_id = APP_STATE.get("settings", {}).get("player_id")
                     is_owner = owner_id and self_id and str(owner_id) == str(self_id)
                     
-                    # 只有房主才显示"开始游戏"按钮
-                    if is_owner and ui.get("start_btn"): ui["start_btn"].draw(screen)
+                    # 显示“开始游戏”按钮（非房主点击后由服务器拒绝）
+                    if ui.get("start_btn"): ui["start_btn"].draw(screen)
                     if ui.get("leave_btn"): ui["leave_btn"].draw(screen)
                     for btn in ui.get("kick_buttons", []):
                         btn.draw(screen)
                     
-                    # Room Info
-                    current_room = APP_STATE.get("current_room", {})
+                    # Room Info（允许 current_room 为 None，使用空字典兜底）
+                    current_room = APP_STATE.get("current_room") or {}
                     rid = current_room.get("room_id", "Unknown")
                     try:
                         font = pygame.font.SysFont("Microsoft YaHei", 30)
@@ -1318,7 +1770,7 @@ def main() -> None:
                         font = pygame.font.SysFont(None, 30)
                         font_p = pygame.font.SysFont(None, 24)
                         
-                    title = font.render(f"房间: {rid}", True, (0, 0, 0))
+                    title = font.render(f"房间: {rid}", True, title_color)
                     screen.blit(title, (screen.get_width() // 2 - title.get_width() // 2, 50))
                     
                     # Player List
@@ -1327,9 +1779,101 @@ def main() -> None:
                     idx = 0
                     for pid, pdata in players.items():
                         name = pdata.get("name", "Unknown")
-                        txt = font_p.render(f"{name}", True, (0, 0, 0))
+                        score = pdata.get("score", 0)
+                        txt = font_p.render(f"{name} - {score}分", True, text_color)
                         screen.blit(txt, (100, start_y + idx * 40))
                         idx += 1
+                    
+                    # 游戏参数设置（仅房主）
+                    if is_owner:
+                        settings_y = sh - 250
+                        try:
+                            font_s = pygame.font.SysFont("Microsoft YaHei", 20)
+                        except:
+                            font_s = pygame.font.SysFont(None, 20)
+                        
+                        txt1 = font_s.render("游戏设置（仅房主）:", True, (60, 60, 60))
+                        screen.blit(txt1, (sw // 2 - 250, settings_y - 50))
+                        
+                        txt2 = font_s.render("轮数:", True, (60, 60, 60))
+                        screen.blit(txt2, (sw // 2 - 250, settings_y - 20))
+                        ui["rounds_input"].draw(screen)
+                        
+                        txt3 = font_s.render("时间/轮:", True, (60, 60, 60))
+                        screen.blit(txt3, (sw // 2 - 50, settings_y - 20))
+                        ui["time_input"].draw(screen)
+                        
+                        txt4 = font_s.render("休息:", True, (60, 60, 60))
+                        screen.blit(txt4, (sw // 2 + 150, settings_y - 20))
+                        ui["rest_input"].draw(screen)
+                        
+                        ui["apply_btn"].draw(screen)
+                    
+                    # 聊天面板
+                    if ui.get("chat"):
+                        ui["chat"].draw(screen)
+                    if ui.get("chat_input"):
+                        ui["chat_input"].draw(screen)
+                    if ui.get("send_btn"):
+                        ui["send_btn"].draw(screen)
+                        
+            elif APP_STATE["screen"] == "result":
+                # 游戏结果界面
+                ui = APP_STATE["ui"]
+                if ui is None:
+                    ui = build_result_ui(screen.get_size())
+                    APP_STATE["ui"] = ui
+                
+                screen.fill((240, 245, 250))
+                
+                # 标题
+                try:
+                    font_title = pygame.font.SysFont("Microsoft YaHei", 50, bold=True)
+                    font_rank = pygame.font.SysFont("Microsoft YaHei", 32)
+                    font_name = pygame.font.SysFont("Microsoft YaHei", 28)
+                except:
+                    font_title = pygame.font.SysFont(None, 50)
+                    font_rank = pygame.font.SysFont(None, 32)
+                    font_name = pygame.font.SysFont(None, 28)
+                
+                title = font_title.render("🏆 游戏结束 - 最终排名 🏆", True, (200, 100, 50))
+                screen.blit(title, (sw // 2 - title.get_width() // 2, 80))
+                
+                # 显示排名
+                ranking = APP_STATE.get("game_result", [])
+                start_y = 200
+                colors = [(255, 215, 0), (192, 192, 192), (205, 127, 50)]  # 金银铜
+                
+                for i, player_data in enumerate(ranking[:10]):  # 最多显示前10名
+                    rank = i + 1
+                    name = player_data.get("name", "玩家")
+                    score = player_data.get("score", 0)
+                    
+                    # 背景框
+                    bg_color = colors[i] if i < 3 else (220, 220, 220)
+                    bg_alpha = 120 if i < 3 else 80
+                    bg_rect = pygame.Rect(sw // 2 - 250, start_y + i * 50, 500, 45)
+                    s = pygame.Surface((bg_rect.width, bg_rect.height))
+                    s.set_alpha(bg_alpha)
+                    s.fill(bg_color)
+                    screen.blit(s, bg_rect.topleft)
+                    
+                    # 排名
+                    rank_txt = font_rank.render(f"#{rank}", True, (60, 60, 60) if i >= 3 else (40, 40, 40))
+                    screen.blit(rank_txt, (sw // 2 - 230, start_y + i * 50 + 8))
+                    
+                    # 名字
+                    name_txt = font_name.render(name, True, (20, 20, 20))
+                    screen.blit(name_txt, (sw // 2 - 150, start_y + i * 50 + 10))
+                    
+                    # 分数
+                    score_txt = font_name.render(f"{score} 分", True, (20, 20, 20))
+                    screen.blit(score_txt, (sw // 2 + 150, start_y + i * 50 + 10))
+                
+                # 返回按钮
+                if ui.get("back_btn"):
+                    ui["back_btn"].draw(screen)
+                        
             elif APP_STATE["screen"] == "settings":
                 ui = APP_STATE["ui"]
                 if ui is None:
@@ -1445,6 +1989,12 @@ def main() -> None:
                     ui["server_host_input"].draw(screen)
                     if ui.get("confirm_host_btn"):
                         ui["confirm_host_btn"].draw(screen)
+                    if ui.get("detect_ip_btn"):
+                        ui["detect_ip_btn"].draw(screen)
+                    if ui.get("server_lan_btn"):
+                        ui["server_lan_btn"].draw(screen)
+                    if ui.get("server_remote_btn"):
+                        ui["server_remote_btn"].draw(screen)
 
                 # 主题切换标签与按钮
                 theme_y = None
