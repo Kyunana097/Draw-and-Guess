@@ -44,7 +44,7 @@ case $choice in
     1)
         echo "🚀 启动服务器..."
         free_port
-        python src/server/main.py
+        HOST=0.0.0.0 PORT=5555 python src/server/main.py
         ;;
     2)
         echo "🚀 启动客户端..."
@@ -53,7 +53,7 @@ case $choice in
     3)
         echo "🚀 启动服务器和客户端..."
         free_port
-        python src/server/main.py &
+        HOST=0.0.0.0 PORT=5555 python src/server/main.py &
         server_pid=$!
         sleep 2
         python src/client/main.py
