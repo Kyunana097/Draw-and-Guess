@@ -517,10 +517,10 @@ def build_play_ui(screen_size: tuple) -> Dict[str, Any]:
         pass
 
     toolbar = Toolbar(toolbar_rect, colors=BRUSH_COLORS, sizes=BRUSH_SIZES, font_name="Microsoft YaHei", click_sound=confirm_sound)
-    
+
     # 创建新聊天框，从保存的消息中恢复
     chat = ChatPanel(chat_rect, font_size=18, font_name="Microsoft YaHei")
-    
+
     # 尝试从保存的消息恢复（窗口大小改变时）
     saved_messages = APP_STATE.get("_saved_chat_messages")
     if saved_messages:
@@ -540,7 +540,7 @@ def build_play_ui(screen_size: tuple) -> Dict[str, Any]:
                 chat.messages = old_chat.messages[:]
                 if hasattr(old_chat, "scroll_offset"):
                     chat.scroll_offset = old_chat.scroll_offset
-    
+
     text_input = TextInput(input_rect, font_name="Microsoft YaHei", font_size=22, placeholder="输入猜词或聊天... Enter发送 / Shift+Enter换行")
     # 发送按钮将在配置中创建并附加到 UI（位置依赖输入区域）
 
@@ -568,7 +568,7 @@ def build_play_ui(screen_size: tuple) -> Dict[str, Any]:
         chat.add_message("你", safe)
 
     text_input.on_submit = _on_submit
-    
+
     # 绘画同步回调：当本地画布有绘画操作时，发送给服务器
     def _on_draw_action(action: dict) -> None:
         try:
@@ -577,7 +577,7 @@ def build_play_ui(screen_size: tuple) -> Dict[str, Any]:
                 net.send_draw(action)
         except Exception:
             pass
-    
+
     canvas.on_draw_action = _on_draw_action
 
     # 返回菜单按钮将在配置中创建并附加到 UI
@@ -778,7 +778,7 @@ def build_settings_ui(screen_size: tuple, confirm_sound: Optional[pygame.mixer.S
 
 def build_room_list_ui(screen_size: tuple) -> Dict[str, Any]:
     sw, sh = screen_size
-    
+
     # Refresh button
     refresh_btn = Button(
         x=sw - 150, y=50, width=100, height=40,
@@ -869,7 +869,7 @@ def build_room_list_ui(screen_size: tuple) -> Dict[str, Any]:
 def build_result_ui(screen_size: tuple) -> Dict[str, Any]:
     """构建游戏结果界面"""
     sw, sh = screen_size
-    
+
     # 返回大厅按钮
     back_btn = Button(
         x=sw // 2 - 80, y=sh - 100, width=160, height=45,
@@ -881,7 +881,7 @@ def build_result_ui(screen_size: tuple) -> Dict[str, Any]:
         APP_STATE["ui"] = None
         APP_STATE["game_result"] = None
     back_btn.on_click = _on_back
-    
+
     return {
         "back_btn": back_btn,
     }
@@ -889,7 +889,7 @@ def build_result_ui(screen_size: tuple) -> Dict[str, Any]:
 
 def build_lobby_ui(screen_size: tuple) -> Dict[str, Any]:
     sw, sh = screen_size
-    
+
     # Start Game button (Owner only, but we show it disabled or handle logic)
     start_btn = Button(
         x=sw - 150, y=50, width=100, height=40,
@@ -914,24 +914,35 @@ def build_lobby_ui(screen_size: tuple) -> Dict[str, Any]:
         APP_STATE["ui"] = None
         net.list_rooms()
     leave_btn.on_click = _on_leave
-    
+
     # 游戏设置输入框（仅房主可见）
+    # 默认值优先从当前房间状态读取，方便房主看到真实配置
+    current_room = APP_STATE.get("current_room") or {}
+    try:
+        default_rounds = str(int(current_room.get("max_rounds") or 3))
+    except Exception:
+        default_rounds = "3"
+    try:
+        default_round_time = str(int(current_room.get("round_duration") or 60))
+    except Exception:
+        default_round_time = "60"
+
     rounds_input = TextInput(
         rect=pygame.Rect(sw // 2 - 250, sh - 200, 120, 35),
         font_name="Microsoft YaHei",
         font_size=18,
-        placeholder="3"
+        placeholder=default_rounds,
     )
-    rounds_input.text = "3"
-    
+    rounds_input.text = default_rounds
+
     time_input = TextInput(
         rect=pygame.Rect(sw // 2 - 50, sh - 200, 120, 35),
         font_name="Microsoft YaHei",
         font_size=18,
-        placeholder="60"
+        placeholder=default_round_time,
     )
-    time_input.text = "60"
-    
+    time_input.text = default_round_time
+
     rest_input = TextInput(
         rect=pygame.Rect(sw // 2 + 150, sh - 200, 120, 35),
         font_name="Microsoft YaHei",
@@ -939,7 +950,7 @@ def build_lobby_ui(screen_size: tuple) -> Dict[str, Any]:
         placeholder="10"
     )
     rest_input.text = "10"
-    
+
     # 应用设置按钮
     apply_btn = Button(
         x=sw // 2 - 60, y=sh - 150, width=120, height=35,
@@ -957,13 +968,13 @@ def build_lobby_ui(screen_size: tuple) -> Dict[str, Any]:
         except ValueError:
             add_notification("请输入有效的数字", color=(200, 60, 60))
     apply_btn.on_click = _on_apply_settings
-    
+
     # 聊天面板（放置在大厅底部，横向铺满，避免遮挡玩家列表）
     pad = 20
     chat_h = max(140, int(sh * 0.22))
     chat_rect = pygame.Rect(pad, sh - chat_h - pad, sw - pad * 2, chat_h)
     chat = ChatPanel(chat_rect, font_size=18, font_name="Microsoft YaHei")
-    
+
     # 聊天输入框
     chat_input_w = max(240, chat_rect.width - 100)
     # 将输入框与发送按钮保持在窗口内，紧贴聊天面板底部
@@ -974,7 +985,7 @@ def build_lobby_ui(screen_size: tuple) -> Dict[str, Any]:
         font_size=16,
         placeholder="输入消息..."
     )
-    
+
     # 发送按钮
     send_btn = Button(
         x=chat_rect.right - 80, y=chat_input_y,
@@ -1086,7 +1097,7 @@ def process_network_messages(ui: Optional[Dict[str, Any]]) -> None:
         # 房间状态更新（兼容老的 room_state）
         if msg.type == MSG_ROOM_UPDATE or msg.type == "room_state":
             APP_STATE["current_room"] = data
-            
+
             # 更新 HUD（倒计时 + 词语），以服务器状态为准，保证所有玩家统一
             if APP_STATE["screen"] == "play" and ui and "hud" in ui:
                 hud = ui["hud"]
@@ -1107,7 +1118,7 @@ def process_network_messages(ui: Optional[Dict[str, Any]]) -> None:
                         hud["round_time_left"] = float(data.get("time_left") or hud.get("round_time_left", 60))
                 except Exception:
                     pass
-            
+
             if APP_STATE["screen"] == "lobby":
                 APP_STATE["ui"] = None
             if data.get("status") == "playing" and APP_STATE["screen"] == "lobby":
@@ -1130,15 +1141,29 @@ def process_network_messages(ui: Optional[Dict[str, Any]]) -> None:
             if event_type == MSG_START_GAME and data.get("ok"):
                 APP_STATE["screen"] = "play"
                 APP_STATE["ui"] = None
-                drawer_name = data.get("drawer_name", "某人")
-                round_num = data.get("round", 1)
-                max_rounds = data.get("max_rounds", 3)
+                drawer_name = data.get("drawer_name") or "某人"
+                # 优先使用服务器提供的 round_number/max_rounds，保证与房主设置一致
+                try:
+                    round_num = int(data.get("round_number") or data.get("round") or 1)
+                except Exception:
+                    round_num = 1
+                try:
+                    # 若事件中未显式提供，则退回到 current_room 的 max_rounds 或默认 3
+                    max_rounds = int(data.get("max_rounds") or (APP_STATE.get("current_room") or {}).get("max_rounds") or 3)
+                except Exception:
+                    max_rounds = 3
                 add_notification(f"游戏开始！第{round_num}/{max_rounds}轮，{drawer_name}是绘画者", color=(50, 200, 50))
                 continue
             if event_type == MSG_NEXT_ROUND:
-                drawer_name = data.get("drawer_name", "某人")
-                round_num = data.get("round", 1)
-                max_rounds = data.get("max_rounds", 3)
+                drawer_name = data.get("drawer_name") or "某人"
+                try:
+                    round_num = int(data.get("round_number") or data.get("round") or 1)
+                except Exception:
+                    round_num = 1
+                try:
+                    max_rounds = int(data.get("max_rounds") or (APP_STATE.get("current_room") or {}).get("max_rounds") or 3)
+                except Exception:
+                    max_rounds = 3
                 add_notification(f"第{round_num}/{max_rounds}轮开始，{drawer_name}是绘画者", color=(80, 150, 200))
                 # 清空画布
                 if ui and "canvas" in ui:
@@ -1288,7 +1313,7 @@ def main() -> None:
             pygame.mixer.init(frequency=44100, size=-16, channels=2, buffer=512)
         except Exception as e:
             logger.warning(f"初始化音频设备失败: {e}")
-        
+
         # 初始化SDL文本输入支持（用于中文输入法）
         try:
             import os
@@ -1298,7 +1323,7 @@ def main() -> None:
             pygame.display.init()
         except Exception as e:
             logger.warning(f"初始化输入法支持失败: {e}")
-        
+
         # 加载持久化设置并确保玩家标识
         load_settings()
         ensure_player_identity()
@@ -1427,13 +1452,13 @@ def main() -> None:
                                 elif cid == "play_send":
                                     ui["send_btn"] = pb
                             APP_STATE["ui"] = ui
-                        
+
                         # 更新画布权限：只有绘画者可以绘画
                         current_room = APP_STATE.get("current_room") or {}
                         drawer_id = current_room.get("drawer_id")
                         self_id = APP_STATE.get("settings", {}).get("player_id")
                         is_drawer = drawer_id and self_id and str(drawer_id) == str(self_id)
-                        
+
                         if "canvas" in ui:
                             ui["canvas"].drawing_enabled = is_drawer
                         if "hud" in ui:
@@ -1511,7 +1536,7 @@ def main() -> None:
                                     add_notification("无法连接服务器，检查地址与端口", color=(200, 60, 60))
                             except Exception:
                                 pass
-                        
+
                         # 每次都根据 APP_STATE["rooms"] 重建房间按钮，确保刷新生效
                         if need_rebuild_rooms or ui.get("_rooms_version") != id(APP_STATE.get("rooms")):
                             rooms = APP_STATE.get("rooms", [])
@@ -1570,13 +1595,13 @@ def main() -> None:
                             players = current_room.get("players") or {}
                             owner_id = current_room.get("owner_id")
                             self_id = APP_STATE.get("settings", {}).get("player_id")
-                            
+
                             kick_buttons = []
                             if str(owner_id) == str(self_id):
                                 start_y = 150
                                 idx = 0
                                 for pid, pdata in players.items():
-                                    if str(pid) == str(self_id): 
+                                    if str(pid) == str(self_id):
                                         idx += 1
                                         continue
                                     btn = Button(
@@ -1605,7 +1630,7 @@ def main() -> None:
                             if ui.get("time_input"): ui["time_input"].handle_event(event)
                             if ui.get("rest_input"): ui["rest_input"].handle_event(event)
                             if ui.get("apply_btn"): ui["apply_btn"].handle_event(event)
-                        
+
                         if ui.get("leave_btn"): ui["leave_btn"].handle_event(event)
                         if ui.get("chat_input"): ui["chat_input"].handle_event(event)
                         if ui.get("send_btn"): ui["send_btn"].handle_event(event)
@@ -1656,7 +1681,7 @@ def main() -> None:
 
                         if ui.get("back_btn"):
                             ui["back_btn"].handle_event(event)
-                    
+
                     elif APP_STATE["screen"] == "result":
                         ui = APP_STATE["ui"]
                         if ui and ui.get("back_btn"):
@@ -1838,7 +1863,7 @@ def main() -> None:
                     ui["send_btn"].draw(screen)
                 if ui.get("back_btn"):
                     ui["back_btn"].draw(screen)
-                
+
                 # 显示玩家得分排行（右侧）
                 current_room = APP_STATE.get("current_room") or {}
                 players = current_room.get("players", {})
@@ -1847,40 +1872,40 @@ def main() -> None:
                         font_score = pygame.font.SysFont("Microsoft YaHei", 20)
                     except:
                         font_score = pygame.font.SysFont(None, 20)
-                    
+
                     score_x = sw - 220
                     score_y = 100
-                    
+
                     # 标题
                     title = font_score.render("得分榜", True, (60, 60, 60))
                     screen.blit(title, (score_x + 50, score_y))
-                    
+
                     # 排序玩家
                     sorted_players = sorted(players.items(), key=lambda x: x[1].get("score", 0), reverse=True)
-                    
+
                     for i, (pid, pdata) in enumerate(sorted_players):
                         name = pdata.get("name", "玩家")
                         score = pdata.get("score", 0)
                         drawer_id = current_room.get("drawer_id")
                         is_drawer = (pid == drawer_id)
-                        
+
                         y_pos = score_y + 40 + i * 30
-                        
+
                         # 背景
                         bg_rect = pygame.Rect(score_x, y_pos - 5, 180, 28)
                         color = (255, 250, 200) if is_drawer else (245, 245, 245)
                         pygame.draw.rect(screen, color, bg_rect)
                         pygame.draw.rect(screen, (200, 200, 200), bg_rect, 1)
-                        
+
                         # 名字
                         prefix = "🎨 " if is_drawer else ""
                         name_txt = font_score.render(f"{prefix}{name}", True, (40, 40, 40))
                         screen.blit(name_txt, (score_x + 5, y_pos))
-                        
+
                         # 分数
                         score_txt = font_score.render(f"{score}", True, (40, 40, 40))
                         screen.blit(score_txt, (score_x + 140, y_pos))
-                
+
                 # 移除“下一轮”按钮显示
             elif APP_STATE["screen"] == "room_list":
                 process_network_messages(APP_STATE.get("ui"))
@@ -1888,14 +1913,14 @@ def main() -> None:
                 if ui is None:
                     ui = build_room_list_ui(screen.get_size())
                     APP_STATE["ui"] = ui
-                
+
                 if ui:
                     if ui.get("refresh_btn"): ui["refresh_btn"].draw(screen)
                     if ui.get("create_btn"): ui["create_btn"].draw(screen)
                     if ui.get("back_btn"): ui["back_btn"].draw(screen)
                     for btn in ui.get("room_buttons", []):
                         btn.draw(screen)
-                    
+
                     # Title
                     try:
                         font = pygame.font.SysFont("Microsoft YaHei", 40)
@@ -1953,7 +1978,7 @@ def main() -> None:
                 if ui is None:
                     ui = build_lobby_ui(screen.get_size())
                     APP_STATE["ui"] = ui
-                
+
                 if ui:
                     # 背景按主题
                     theme = APP_STATE["settings"].get("theme", "light")
@@ -1972,13 +1997,13 @@ def main() -> None:
                     owner_id = current_room.get("owner_id")
                     self_id = APP_STATE.get("settings", {}).get("player_id")
                     is_owner = owner_id and self_id and str(owner_id) == str(self_id)
-                    
+
                     # 显示“开始游戏”按钮（非房主点击后由服务器拒绝）
                     if ui.get("start_btn"): ui["start_btn"].draw(screen)
                     if ui.get("leave_btn"): ui["leave_btn"].draw(screen)
                     for btn in ui.get("kick_buttons", []):
                         btn.draw(screen)
-                    
+
                     # Room Info（允许 current_room 为 None，使用空字典兜底）
                     current_room = APP_STATE.get("current_room") or {}
                     rid = current_room.get("room_id", "Unknown")
@@ -1988,7 +2013,7 @@ def main() -> None:
                     except:
                         font = pygame.font.SysFont(None, 30)
                         font_p = pygame.font.SysFont(None, 24)
-                        
+
                     title = font.render(f"房间: {rid}", True, title_color)
                     screen.blit(title, (screen.get_width() // 2 - title.get_width() // 2, 50))
                     # 显示房主
@@ -2006,7 +2031,7 @@ def main() -> None:
                     owner_label = f"房主: {owner_name or '未指定'}"
                     owner_txt = font_owner.render(owner_label, True, text_color)
                     screen.blit(owner_txt, (100, 110))
-                    
+
                     # Player List
                     players = current_room.get("players", {})
                     start_y = 150
@@ -2017,7 +2042,7 @@ def main() -> None:
                         txt = font_p.render(f"{name} - {score}分", True, text_color)
                         screen.blit(txt, (100, start_y + idx * 40))
                         idx += 1
-                    
+
                     # 游戏参数设置（仅房主）
                     if is_owner:
                         settings_y = sh - 250
@@ -2025,24 +2050,24 @@ def main() -> None:
                             font_s = pygame.font.SysFont("Microsoft YaHei", 20)
                         except:
                             font_s = pygame.font.SysFont(None, 20)
-                        
+
                         txt1 = font_s.render("游戏设置（仅房主）:", True, (60, 60, 60))
                         screen.blit(txt1, (sw // 2 - 250, settings_y - 50))
-                        
+
                         txt2 = font_s.render("轮数:", True, (60, 60, 60))
                         screen.blit(txt2, (sw // 2 - 250, settings_y - 20))
                         ui["rounds_input"].draw(screen)
-                        
+
                         txt3 = font_s.render("时间/轮:", True, (60, 60, 60))
                         screen.blit(txt3, (sw // 2 - 50, settings_y - 20))
                         ui["time_input"].draw(screen)
-                        
+
                         txt4 = font_s.render("休息:", True, (60, 60, 60))
                         screen.blit(txt4, (sw // 2 + 150, settings_y - 20))
                         ui["rest_input"].draw(screen)
-                        
+
                         ui["apply_btn"].draw(screen)
-                    
+
                     # 聊天面板
                     if ui.get("chat"):
                         ui["chat"].draw(screen)
@@ -2050,16 +2075,16 @@ def main() -> None:
                         ui["chat_input"].draw(screen)
                     if ui.get("send_btn"):
                         ui["send_btn"].draw(screen)
-                        
+
             elif APP_STATE["screen"] == "result":
                 # 游戏结果界面
                 ui = APP_STATE["ui"]
                 if ui is None:
                     ui = build_result_ui(screen.get_size())
                     APP_STATE["ui"] = ui
-                
+
                 screen.fill((240, 245, 250))
-                
+
                 # 标题
                 try:
                     font_title = pygame.font.SysFont("Microsoft YaHei", 50, bold=True)
@@ -2069,20 +2094,20 @@ def main() -> None:
                     font_title = pygame.font.SysFont(None, 50)
                     font_rank = pygame.font.SysFont(None, 32)
                     font_name = pygame.font.SysFont(None, 28)
-                
+
                 title = font_title.render("🏆 游戏结束 - 最终排名 🏆", True, (200, 100, 50))
                 screen.blit(title, (sw // 2 - title.get_width() // 2, 80))
-                
+
                 # 显示排名
                 ranking = APP_STATE.get("game_result", [])
                 start_y = 200
                 colors = [(255, 215, 0), (192, 192, 192), (205, 127, 50)]  # 金银铜
-                
+
                 for i, player_data in enumerate(ranking[:10]):  # 最多显示前10名
                     rank = i + 1
                     name = player_data.get("name", "玩家")
                     score = player_data.get("score", 0)
-                    
+
                     # 背景框
                     bg_color = colors[i] if i < 3 else (220, 220, 220)
                     bg_alpha = 120 if i < 3 else 80
@@ -2091,23 +2116,23 @@ def main() -> None:
                     s.set_alpha(bg_alpha)
                     s.fill(bg_color)
                     screen.blit(s, bg_rect.topleft)
-                    
+
                     # 排名
                     rank_txt = font_rank.render(f"#{rank}", True, (60, 60, 60) if i >= 3 else (40, 40, 40))
                     screen.blit(rank_txt, (sw // 2 - 230, start_y + i * 50 + 8))
-                    
+
                     # 名字
                     name_txt = font_name.render(name, True, (20, 20, 20))
                     screen.blit(name_txt, (sw // 2 - 150, start_y + i * 50 + 10))
-                    
+
                     # 分数
                     score_txt = font_name.render(f"{score} 分", True, (20, 20, 20))
                     screen.blit(score_txt, (sw // 2 + 150, start_y + i * 50 + 10))
-                
+
                 # 返回按钮
                 if ui.get("back_btn"):
                     ui["back_btn"].draw(screen)
-                        
+
             elif APP_STATE["screen"] == "settings":
                 ui = APP_STATE["ui"]
                 if ui is None:
@@ -2269,7 +2294,7 @@ def main() -> None:
                     n_font = pygame.font.SysFont("Microsoft YaHei", 24, bold=True)
                 except Exception:
                     n_font = pygame.font.SysFont(None, 24)
-                
+
                 txt_surf = n_font.render(n["text"], True, n["color"])
                 # 居中显示在屏幕顶部
                 tx = (screen.get_width() - txt_surf.get_width()) // 2

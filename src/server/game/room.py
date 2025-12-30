@@ -26,7 +26,7 @@ class GameRoom:
         """添加玩家到房间"""
         if player_id in self.players:
             return True
-        
+
         # 如果是第一个玩家，设为房主
         if not self.players:
             self.owner_id = player_id
@@ -42,7 +42,7 @@ class GameRoom:
         """从房间移除玩家"""
         if player_id in self.players:
             del self.players[player_id]
-            
+
             # 如果房主离开，移交房主权限
             if self.owner_id == player_id:
                 if self.players:
@@ -58,7 +58,7 @@ class GameRoom:
 
     def get_public_state(self, for_drawer: bool = False) -> dict:
         """获取房间的公开状态（用于广播给所有玩家）
-        
+
         Args:
             for_drawer: 如果为True，包含当前词语；否则隐藏词语（只有绘者看得到）
         """
@@ -101,13 +101,13 @@ class GameRoom:
         self.current_drawer_index = 0
         # 记录当前回合开始时间，用于统一倒计时
         self.round_start_time = time.time()
-        
+
         # 生成随机绘画顺序（允许重复，使每个玩家都有机会绘画max_rounds次）
         player_ids = list(self.players.keys())
         self.drawer_order = []
         for _ in range(self.max_rounds):
             self.drawer_order.extend(random.sample(player_ids, len(player_ids)))
-        
+
         for p in self.players.values():
             p["score"] = 0
         return self.next_round()
@@ -119,7 +119,7 @@ class GameRoom:
             return False
 
         self.round_number += 1
-        
+
         # 从预生成的顺序中获取当前绘者
         if self.current_drawer_index < len(self.drawer_order):
             self.drawer_id = self.drawer_order[self.current_drawer_index]
@@ -127,7 +127,7 @@ class GameRoom:
         else:
             self.end_game()
             return False
-        
+
         for pid, p in self.players.items():
             p["is_drawer"] = (pid == self.drawer_id)
 
@@ -136,7 +136,7 @@ class GameRoom:
         self.current_word = random.choice(words)
         # 新一轮开始时刷新回合开始时间
         self.round_start_time = time.time()
-        
+
         return True
 
     def end_game(self):
@@ -149,7 +149,7 @@ class GameRoom:
         """提交猜词"""
         if self.status != "playing" or player_id == self.drawer_id:
             return False, 0
-        
+
         if guess_text == self.current_word:
             # 猜对了，加分
             score_gain = 10
@@ -157,9 +157,9 @@ class GameRoom:
             # 画手也加分
             if self.drawer_id:
                 self.players[self.drawer_id]["score"] += 5
-            
+
             # 简化：猜对后立即进入下一回合（实际可能需要等待计时结束）
-            # self.next_round() 
+            # self.next_round()
             return True, score_gain
-        
+
         return False, 0

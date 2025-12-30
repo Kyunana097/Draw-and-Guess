@@ -187,12 +187,12 @@ class NetworkServer:
 			room_id = str(len(self.rooms) + 1)
 			new_room = GameRoom(room_id)
 			self.rooms[room_id] = new_room
-			
+
 			# 自动加入
 			if sess.player_id and sess.player_name:
 				new_room.add_player(sess.player_id, sess.player_name)
 				sess.room_id = room_id
-				
+
 				self._send(sess, Message("ack", {"ok": True, "event": MSG_CREATE_ROOM, "room_id": room_id}))
 			self.broadcast_room_state(room_id)
 			# 广播房间列表更新，便于其他客户端立刻看到新房间
@@ -266,7 +266,7 @@ class NetworkServer:
 				self.broadcast_rooms_update()
 				if not room.players:
 					del self.rooms[sess.room_id]
-			
+
 			sess.room_id = None
 			self._send(sess, Message("ack", {"ok": True, "event": MSG_LEAVE_ROOM}))
 
@@ -302,13 +302,24 @@ class NetworkServer:
 					if ok:
 						# 广播游戏开始和房间状态更新（词语隐藏）
 						self.broadcast_room_state(sess.room_id)
-						# 发送特定的游戏开始事件，包含绘画顺序信息
+						# 发送特定的游戏开始事件，包含绘画顺序与回合信息
+						try:
+							players = room.players or {}
+							drawer_name = None
+							if room.drawer_id and room.drawer_id in players:
+								drawer_name = players[room.drawer_id].get("name")
+						except Exception:
+							drawer_name = None
 						self.broadcast_room(sess.room_id, Message("event", {
 							"type": MSG_START_GAME,
 							"ok": True,
 							"drawer_order": room.drawer_order,
 							"drawer_id": room.drawer_id,
-							"round_number": room.round_number
+							"drawer_name": drawer_name,
+							# 同时提供 round_number 与 round，便于旧客户端兼容
+							"round_number": room.round_number,
+							"round": room.round_number,
+							"max_rounds": room.max_rounds,
 						}))
 					else:
 						self._send(sess, Message("error", {"msg": "Cannot start game with no players"}))
@@ -325,12 +336,22 @@ class NetworkServer:
 				if ok:
 					# 广播房间状态更新（词语隐藏）
 					self.broadcast_room_state(sess.room_id)
-					# 发送轮次开始事件
+					# 发送轮次开始事件，附带当前轮次与总轮数
+					try:
+						players = room.players or {}
+						drawer_name = None
+						if room.drawer_id and room.drawer_id in players:
+							drawer_name = players[room.drawer_id].get("name")
+					except Exception:
+						drawer_name = None
 					self.broadcast_room(sess.room_id, Message("event", {
 						"type": MSG_NEXT_ROUND,
 						"ok": True,
 						"drawer_id": room.drawer_id,
-						"round_number": room.round_number
+						"drawer_name": drawer_name,
+						"round_number": room.round_number,
+						"round": room.round_number,
+						"max_rounds": room.max_rounds,
 					}))
 				else:
 					# 游戏结束
@@ -391,7 +412,7 @@ class NetworkServer:
 		if room_id not in self.rooms:
 			return
 		room = self.rooms[room_id]
-		
+
 		for s in list(self.sessions.values()):
 			if s.room_id == room_id:
 				# 如果该玩家是绘者，发送包含词语的状态；否则隐藏词语
