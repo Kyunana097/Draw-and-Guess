@@ -1,9 +1,9 @@
 {
-  "player_name": "player",
+  "player_name": "player1",
   "difficulty": "普通",
   "volume": 7,
   "theme": "light",
   "fullscreen": false,
-  "server_host": "192.168.101.4",
+  "server_host": "81.68.144.16",
   "server_port": 5555
 }
