@@ -163,6 +163,27 @@ def start_local_server(port: int = 5555) -> bool:
     返回是否成功启动。保存进程对象到 APP_STATE，以便后续管理。
     """
     try:
+        # 启动前检测端口占用，避免重复启动导致 Address already in use
+        def _port_in_use(p: int) -> bool:
+            import socket
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.settimeout(0.5)
+            try:
+                # 仅检查本地环回端口是否有服务
+                s.connect(("127.0.0.1", p))
+                return True
+            except Exception:
+                return False
+            finally:
+                try:
+                    s.close()
+                except Exception:
+                    pass
+
+        if _port_in_use(port):
+            add_notification(f"端口 {port} 已被占用，未启动本地服务器", color=(200, 60, 60))
+            return False
+
         server_path = Path(__file__).parent.parent.parent / "server-deploy" / "server.py"
         if not server_path.exists():
             add_notification("未找到服务器脚本 server-deploy/server.py", color=(200, 60, 60))
@@ -999,6 +1020,15 @@ def process_network_messages(ui: Optional[Dict[str, Any]]) -> None:
                 APP_STATE["ui"] = None
             continue
 
+        # 服务器主动广播的房间列表更新（无需客户端手动刷新）
+        if msg.type == "rooms_update":
+            rooms = data.get("rooms", [])
+            APP_STATE["rooms"] = rooms
+            if APP_STATE.get("screen") == "room_list":
+                # 重建UI以刷新房间按钮列表
+                APP_STATE["ui"] = None
+            continue
+
         # 服务器发送的 event 类型消息（游戏事件）
         if msg.type == "event":
             event_type = data.get("type")
@@ -1373,9 +1403,11 @@ def main() -> None:
                                         pass
                     elif APP_STATE["screen"] == "room_list":
                         ui = APP_STATE["ui"]
+                        need_rebuild_rooms = False
                         if ui is None:
                             ui = build_room_list_ui(screen.get_size())
                             APP_STATE["ui"] = ui
+                            need_rebuild_rooms = True
                             # 进入房间列表时自动拉取一次列表
                             try:
                                 player_id = APP_STATE["settings"].get("player_id") or ensure_player_identity()
@@ -1386,7 +1418,9 @@ def main() -> None:
                                     add_notification("无法连接服务器，检查地址与端口", color=(200, 60, 60))
                             except Exception:
                                 pass
-                            # Rebuild room buttons based on APP_STATE["rooms"]
+                        
+                        # 每次都根据 APP_STATE["rooms"] 重建房间按钮，确保刷新生效
+                        if need_rebuild_rooms or ui.get("_rooms_version") != id(APP_STATE.get("rooms")):
                             rooms = APP_STATE.get("rooms", [])
                             room_buttons = []
                             start_y = 150
@@ -1410,6 +1444,7 @@ def main() -> None:
                                 btn.on_click = _join
                                 room_buttons.append(btn)
                             ui["room_buttons"] = room_buttons
+                            ui["_rooms_version"] = id(APP_STATE.get("rooms"))
 
                         # 事件分发：确保 ui 存在后再处理
                         if ui:
