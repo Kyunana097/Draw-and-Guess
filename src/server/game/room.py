@@ -1,4 +1,5 @@
 import random
+import time
 from typing import Dict, List, Optional, Tuple
 
 
@@ -61,6 +62,21 @@ class GameRoom:
         Args:
             for_drawer: 如果为True，包含当前词语；否则隐藏词语（只有绘者看得到）
         """
+        # 根据回合开始时间与持续时间计算剩余时间，保证所有玩家看到一致的倒计时
+        if self.status == "playing" and self.round_start_time:
+            try:
+                elapsed = max(0.0, time.time() - float(self.round_start_time))
+            except Exception:
+                elapsed = 0.0
+        else:
+            elapsed = 0.0
+        time_left = 0
+        try:
+            if self.status == "playing":
+                time_left = max(0, int(self.round_duration - elapsed))
+        except Exception:
+            time_left = 0
+
         return {
             "room_id": self.room_id,
             "owner_id": self.owner_id,
@@ -69,6 +85,8 @@ class GameRoom:
             "drawer_id": self.drawer_id,
             "round_number": self.round_number,
             "max_rounds": self.max_rounds,
+            "round_duration": self.round_duration,
+            "time_left": time_left,
             "current_word": self.current_word if (self.status == "playing" and for_drawer) else None,
             "drawer_order": self.drawer_order,  # 绘画顺序列表
             "current_drawer_index": self.current_drawer_index,  # 当前轮次索引
@@ -81,6 +99,8 @@ class GameRoom:
         self.status = "playing"
         self.round_number = 0
         self.current_drawer_index = 0
+        # 记录当前回合开始时间，用于统一倒计时
+        self.round_start_time = time.time()
         
         # 生成随机绘画顺序（允许重复，使每个玩家都有机会绘画max_rounds次）
         player_ids = list(self.players.keys())
@@ -114,6 +134,8 @@ class GameRoom:
         # 随机选词（这里简化处理，实际应从词库加载）
         words = ["苹果", "香蕉", "电脑", "汽车", "飞机", "西瓜", "兔子", "太阳"]
         self.current_word = random.choice(words)
+        # 新一轮开始时刷新回合开始时间
+        self.round_start_time = time.time()
         
         return True
 

@@ -1,9 +1,9 @@
 {
-  "player_name": "player2",
+  "player_name": "秘密男女",
   "difficulty": "普通",
-  "volume": 7,
+  "volume": 50,
   "theme": "light",
   "fullscreen": false,
-  "server_host": "198.18.0.1",
+  "server_host": "192.168.43.81",
   "server_port": 5555
 }

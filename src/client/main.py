@@ -59,7 +59,7 @@ BUTTON_STAGGER = 0.2  # seconds between staggered starts
 
 # App state
 APP_STATE: Dict[str, Any] = {
-    "screen": "menu",  # menu | room_list | lobby | play | settings
+    "screen": "menu",  # menu | room_list | lobby | play | settings | creating_room
     "ui": None,
     "settings": {
         "player_name": "玩家",
@@ -81,6 +81,8 @@ APP_STATE: Dict[str, Any] = {
     # 保存聊天消息和滚动状态（窗口改变时）
     "_saved_chat_messages": None,
     "_saved_chat_scroll": None,
+    # 创建房间加载界面使用的实时日志
+    "creating_logs": [],
 }
 
 
@@ -157,6 +159,77 @@ def detect_local_ip() -> str:
         return "127.0.0.1"
 
 
+def _cleanup_local_server_process(port: int) -> bool:
+    """尝试清理占用指定端口的旧本地服务器进程。
+
+    仅作用于本机的 5555 等游戏端口，用于解决上一次游戏遗留的服务器进程
+    挤占端口的问题，不会影响远程专用服务器。
+    """
+    try:
+        killed_any = False
+        if os.name == "nt":
+            # Windows: 使用 netstat 查找监听端口的 PID，并用 taskkill 结束
+            try:
+                cmd = f"netstat -ano | findstr :{port} | findstr LISTENING"
+                output = subprocess.check_output(cmd, shell=True, encoding="utf-8", errors="ignore")
+            except Exception:
+                return False
+
+            pids = set()
+            for line in output.splitlines():
+                parts = line.split()
+                if len(parts) >= 5:
+                    pid = parts[-1]
+                    if pid.isdigit():
+                        pids.add(pid)
+
+            for pid in pids:
+                try:
+                    subprocess.run([
+                        "taskkill",
+                        "/F",
+                        "/PID",
+                        pid,
+                    ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+                    killed_any = True
+                except Exception:
+                    continue
+        else:
+            # 类 Unix: 优先尝试 fuser，其次 lsof
+            try:
+                subprocess.run(
+                    ["fuser", "-k", f"{port}/tcp"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    check=False,
+                )
+                killed_any = True
+            except Exception:
+                try:
+                    pid_output = subprocess.check_output(
+                        ["lsof", "-ti", f"tcp:{port}"],
+                        encoding="utf-8",
+                        errors="ignore",
+                    )
+                    pids = {p.strip() for p in pid_output.splitlines() if p.strip()}
+                    for pid in pids:
+                        subprocess.run([
+                            "kill",
+                            "-9",
+                            pid,
+                        ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+                        killed_any = True
+                except Exception:
+                    pass
+
+        if killed_any:
+            add_notification(f"已尝试清理端口 {port} 上的旧服务器进程", color=(60, 160, 220))
+        return killed_any
+    except Exception as exc:
+        logger.warning("清理本地服务器进程失败: %s", exc)
+        return False
+
+
 def start_local_server(port: int = 5555) -> bool:
     """在本机后台启动服务器进程（HOST=0.0.0.0）。
 
@@ -181,8 +254,21 @@ def start_local_server(port: int = 5555) -> bool:
                     pass
 
         if _port_in_use(port):
-            add_notification(f"端口 {port} 已被占用，未启动本地服务器", color=(200, 60, 60))
-            return False
+            # 端口被占用时，优先尝试清理上一次游戏遗留的本地服务器进程
+            cleaned = _cleanup_local_server_process(port)
+            if cleaned:
+                # 略微等待端口释放
+                try:
+                    import time as _t
+                    _t.sleep(0.5)
+                except Exception:
+                    pass
+                if _port_in_use(port):
+                    add_notification(f"端口 {port} 仍被占用，未启动本地服务器", color=(200, 60, 60))
+                    return False
+            else:
+                add_notification(f"端口 {port} 已被占用，未启动本地服务器", color=(200, 60, 60))
+                return False
 
         server_path = Path(__file__).parent.parent.parent / "server-deploy" / "server.py"
         if not server_path.exists():
@@ -496,28 +582,15 @@ def build_play_ui(screen_size: tuple) -> Dict[str, Any]:
 
     # 返回菜单按钮将在配置中创建并附加到 UI
 
-    # HUD 状态（计时与词库）
+    # HUD 状态（计时与词语），具体数值将在进入房间 / 接收服务器状态时由网络消息覆盖
     hud_state = {
         "topbar_h": topbar_h,
         "round_time_total": 60,
         "round_time_left": 60,
-        "is_drawer": True,  # 单机预览默认作为画手
+        "is_drawer": False,
         "current_word": None,
         "last_tick": pygame.time.get_ticks(),
     }
-
-    # 尝试加载单词
-    try:
-        words_path = Path(__file__).parent.parent.parent / "data" / "words.txt"
-        if words_path.exists():
-            import random
-
-            with open(words_path, "r", encoding="utf-8") as f:
-                words = [w.strip() for w in f if w.strip()]
-            if words:
-                hud_state["current_word"] = random.choice(words)
-    except Exception as _:
-        pass
 
     return {
         "canvas": canvas,
@@ -739,10 +812,17 @@ def build_room_list_ui(screen_size: tuple) -> Dict[str, Any]:
             logger.info(f"尝试连接: player_name={player_name}, player_id={player_id}")
             if net.connect(player_name, player_id):
                 logger.info("连接成功，发送创建房间请求")
+                # 切换到简易加载界面，避免用户误以为卡死
+                APP_STATE["screen"] = "creating_room"
+                APP_STATE["ui"] = None
+                # 初始化创建房间日志
+                APP_STATE["creating_logs"] = [
+                    "已连接到服务器",
+                    "正在发送创建房间请求...",
+                ]
                 add_notification("正在创建房间...", color=(50, 180, 80))
                 net.create_room(f"{player_name}的房间")
-                # 立即切到大厅，等待服务器确认，提升可见性
-                # 预填充最小房间状态，先显示本地玩家列表，待服务器广播覆盖
+                # 预填充最小房间状态，待服务器广播覆盖
                 try:
                     APP_STATE["current_room"] = {
                         "room_id": None,
@@ -754,9 +834,6 @@ def build_room_list_ui(screen_size: tuple) -> Dict[str, Any]:
                     }
                 except Exception:
                     pass
-                APP_STATE["screen"] = "lobby"
-                APP_STATE["ui"] = None
-                add_notification("等待服务器确认进入大厅...", color=(120, 120, 220))
             else:
                 logger.info("连接失败")
                 add_notification("无法连接服务器，检查地址与端口", color=(200, 60, 60))
@@ -950,6 +1027,15 @@ def process_network_messages(ui: Optional[Dict[str, Any]]) -> None:
                     APP_STATE["ui"] = None
                 # 不显示通知，UI 更新本身就是反馈
             elif event == MSG_CREATE_ROOM and data.get("ok"):
+                # 创建房间成功时，向加载界面追加日志
+                try:
+                    logs = APP_STATE.get("creating_logs")
+                    if isinstance(logs, list):
+                        room_id = data.get("room_id") or "?"
+                        logs.append(f"服务器已创建房间 (ID={room_id})")
+                        logs.append("正在进入房间大厅...")
+                except Exception:
+                    pass
                 APP_STATE["screen"] = "lobby"
                 APP_STATE["ui"] = None
                 # 预填充房间状态，等待服务器广播覆盖
@@ -1001,17 +1087,26 @@ def process_network_messages(ui: Optional[Dict[str, Any]]) -> None:
         if msg.type == MSG_ROOM_UPDATE or msg.type == "room_state":
             APP_STATE["current_room"] = data
             
-            # 更新 HUD 中的词语和绘者状态
+            # 更新 HUD（倒计时 + 词语），以服务器状态为准，保证所有玩家统一
             if APP_STATE["screen"] == "play" and ui and "hud" in ui:
                 hud = ui["hud"]
                 player_id = APP_STATE["settings"].get("player_id")
                 drawer_id = data.get("drawer_id")
                 hud["is_drawer"] = (player_id == drawer_id)
-                # 如果是绘者，显示词语；否则词语为 None（会显示"隐藏"）
+                # 如果是绘者，显示服务器给的词语；否则隐藏
                 if hud["is_drawer"]:
                     hud["current_word"] = data.get("current_word")
                 else:
                     hud["current_word"] = None
+
+                # 同步回合时长与剩余时间，保证中途加入的玩家看到一致的倒计时
+                try:
+                    if "round_duration" in data:
+                        hud["round_time_total"] = float(data.get("round_duration") or hud.get("round_time_total", 60))
+                    if "time_left" in data:
+                        hud["round_time_left"] = float(data.get("time_left") or hud.get("round_time_left", 60))
+                except Exception:
+                    pass
             
             if APP_STATE["screen"] == "lobby":
                 APP_STATE["ui"] = None
@@ -1089,6 +1184,9 @@ def process_network_messages(ui: Optional[Dict[str, Any]]) -> None:
                 pass
         elif msg.type == "draw_sync":
             # 处理远程绘画同步
+            # 若 UI 尚未初始化（例如刚切换到 play 时），直接丢弃该帧以避免崩溃
+            if not ui:
+                continue
             by_id = data.get("by")
             if by_id and self_id and str(by_id) == str(self_id):
                 # 跳过自己的绘画动作（已在本地显示）
@@ -1101,6 +1199,8 @@ def process_network_messages(ui: Optional[Dict[str, Any]]) -> None:
             except Exception:
                 pass
         elif msg.type == "room_state":
+            if not ui:
+                continue
             hud = ui.get("hud")
             if hud:
                 try:
@@ -1111,6 +1211,14 @@ def process_network_messages(ui: Optional[Dict[str, Any]]) -> None:
         # 错误反馈
         if msg.type == "error":
             err = data.get("msg") or "操作失败"
+            # 在创建房间加载界面中，将错误写入实时日志
+            try:
+                if APP_STATE.get("screen") == "creating_room":
+                    logs = APP_STATE.get("creating_logs")
+                    if isinstance(logs, list):
+                        logs.append(f"错误: {err}")
+            except Exception:
+                pass
             add_notification(f"错误: {err}", color=(200, 60, 60))
             continue
 
@@ -1386,21 +1494,6 @@ def main() -> None:
                                     chosen = BRUSH_COLORS[idx]
                                     ui["canvas"].set_color(chosen)
                                     ui["toolbar"].set_selected_color(chosen)
-                            elif event.key in (pygame.K_n,):
-                                # 下一回合：重置计时与换词
-                                hud = ui.get("hud")
-                                if hud:
-                                    hud["round_time_left"] = hud.get("round_time_total", 60)
-                                    try:
-                                        words_path = Path(__file__).parent.parent.parent / "data" / "words.txt"
-                                        if words_path.exists():
-                                            import random
-                                            with open(words_path, "r", encoding="utf-8") as f:
-                                                words = [w.strip() for w in f if w.strip()]
-                                            if words:
-                                                hud["current_word"] = random.choice(words)
-                                    except Exception:
-                                        pass
                     elif APP_STATE["screen"] == "room_list":
                         ui = APP_STATE["ui"]
                         need_rebuild_rooms = False
@@ -1527,6 +1620,42 @@ def main() -> None:
                                 pass
                         for btn in ui.get("kick_buttons", []):
                             btn.handle_event(event)
+
+                    elif APP_STATE["screen"] == "creating_room":
+                        # 创建房间加载界面：仅需要处理“返回房间列表”按钮
+                        ui = APP_STATE["ui"]
+                        if ui is None:
+                            # 在右上角放置一个返回按钮，允许用户中断等待并回到房间列表
+                            back_btn = Button(
+                                x=50,
+                                y=50,
+                                width=160,
+                                height=45,
+                                text="返回房间列表",
+                                bg_color=(200, 100, 100),
+                                fg_color=(255, 255, 255),
+                                font_name="Microsoft YaHei",
+                                font_size=20,
+                            )
+
+                            def _on_back_from_creating() -> None:
+                                # 返回房间列表并重新拉取一次列表
+                                APP_STATE["screen"] = "room_list"
+                                APP_STATE["ui"] = None
+                                try:
+                                    player_id = APP_STATE["settings"].get("player_id") or ensure_player_identity()
+                                    net = get_network_client()
+                                    if net.connected or net.connect(APP_STATE["settings"]["player_name"], player_id):
+                                        net.list_rooms()
+                                except Exception:
+                                    pass
+
+                            back_btn.on_click = _on_back_from_creating
+                            ui = {"back_btn": back_btn}
+                            APP_STATE["ui"] = ui
+
+                        if ui.get("back_btn"):
+                            ui["back_btn"].handle_event(event)
                     
                     elif APP_STATE["screen"] == "result":
                         ui = APP_STATE["ui"]
@@ -1578,7 +1707,7 @@ def main() -> None:
 
             if APP_STATE["screen"] == "play":
                 process_network_messages(APP_STATE.get("ui"))
-            elif APP_STATE["screen"] in ("room_list", "lobby"):
+            elif APP_STATE["screen"] in ("room_list", "lobby", "creating_room"):
                 process_network_messages(APP_STATE.get("ui"))
 
             # 如果存在待处理的 resize 且防抖期已过，则执行一次性的重建操作
@@ -1666,6 +1795,30 @@ def main() -> None:
                             ui["back_btn"] = pb
                         elif cid == "play_send":
                             ui["send_btn"] = pb
+                    # 初次进入游戏界面时，用服务器的 current_room 状态同步 HUD，
+                    # 确保中途加入的玩家看到与已有玩家一致的回合、倒计时与词语。
+                    try:
+                        current_room = APP_STATE.get("current_room") or {}
+                        hud = ui.get("hud")
+                        if isinstance(hud, dict) and current_room:
+                            # 同步回合时长与剩余时间
+                            rd = current_room.get("round_duration")
+                            if isinstance(rd, (int, float)):
+                                hud["round_time_total"] = float(rd)
+                            tl = current_room.get("time_left")
+                            if isinstance(tl, (int, float)):
+                                hud["round_time_left"] = float(tl)
+
+                            # 同步绘者身份与当前词语
+                            drawer_id = current_room.get("drawer_id")
+                            self_id = APP_STATE.get("settings", {}).get("player_id")
+                            hud["is_drawer"] = bool(drawer_id and self_id and str(drawer_id) == str(self_id))
+                            if hud["is_drawer"]:
+                                hud["current_word"] = current_room.get("current_word")
+                            else:
+                                hud["current_word"] = None
+                    except Exception:
+                        pass
                     APP_STATE["ui"] = ui
 
                 # 根据主题绘制背景
@@ -1750,6 +1903,49 @@ def main() -> None:
                         font = pygame.font.SysFont(None, 40)
                     title = font.render("房间列表", True, (0, 0, 0))
                     screen.blit(title, (screen.get_width() // 2 - title.get_width() // 2, 50))
+
+            elif APP_STATE["screen"] == "creating_room":
+                # 创建房间加载界面：显示主提示、返回按钮和实时日志
+                process_network_messages(APP_STATE.get("ui"))
+                screen.fill((240, 242, 250))
+
+                ui = APP_STATE.get("ui") or {}
+
+                try:
+                    font_title = pygame.font.SysFont("Microsoft YaHei", 40)
+                    font_tip = pygame.font.SysFont("Microsoft YaHei", 24)
+                    font_log = pygame.font.SysFont("Microsoft YaHei", 20)
+                except Exception:
+                    font_title = pygame.font.SysFont(None, 40)
+                    font_tip = pygame.font.SysFont(None, 24)
+                    font_log = pygame.font.SysFont(None, 20)
+
+                text = "正在创建房间..."
+                title = font_title.render(text, True, (50, 80, 150))
+                tx = (screen.get_width() - title.get_width()) // 2
+                ty = screen.get_height() // 2 - 80
+                screen.blit(title, (tx, ty))
+
+                tip_txt = font_tip.render("如长时间无响应，可点击左上角返回房间列表", True, (100, 100, 110))
+                tip_x = (screen.get_width() - tip_txt.get_width()) // 2
+                tip_y = ty + 60
+                screen.blit(tip_txt, (tip_x, tip_y))
+
+                # 绘制实时日志（仅显示最近若干条）
+                logs = APP_STATE.get("creating_logs") or []
+                max_lines = 8
+                start_y = tip_y + 50
+                line_spacing = 26
+                visible_logs = logs[-max_lines:]
+                for i, line in enumerate(visible_logs):
+                    log_surf = font_log.render(str(line), True, (80, 80, 90))
+                    lx = (screen.get_width() - log_surf.get_width()) // 2
+                    ly = start_y + i * line_spacing
+                    screen.blit(log_surf, (lx, ly))
+
+                # 返回按钮（如果已创建）
+                if ui.get("back_btn"):
+                    ui["back_btn"].draw(screen)
 
             elif APP_STATE["screen"] == "lobby":
                 process_network_messages(APP_STATE.get("ui"))
