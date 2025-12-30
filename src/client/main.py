@@ -1940,10 +1940,10 @@ def main() -> None:
                 if ui.get("back_btn"):
                     ui["back_btn"].draw(screen)
 
-                # 显示玩家得分排行：使用画布左侧预留区域，避免遮挡画笔工具栏
+                # 显示玩家得分排行：使用画布左侧预留区域，始终显示积分榜面板
                 current_room = APP_STATE.get("current_room") or {}
                 players = current_room.get("players", {})
-                if players and ui.get("canvas"):
+                if ui.get("canvas"):
                     try:
                         font_score = pygame.font.SysFont("Microsoft YaHei", 20)
                     except:
@@ -1953,6 +1953,13 @@ def main() -> None:
                     # 画布左侧预留约 180 像素作为积分榜区域，这里整体贴着左侧边缘
                     score_x = max(10, canvas_rect.x - 180)
                     score_y = canvas_rect.y + 10
+
+                    # 绘制积分榜面板背景（始终显示）
+                    panel_w = 170
+                    panel_h = max(60, 50 + len(players) * 36)  # 根据玩家数量动态调整高度
+                    panel_rect = pygame.Rect(score_x - 5, score_y - 5, panel_w, panel_h)
+                    pygame.draw.rect(screen, (250, 250, 255), panel_rect)
+                    pygame.draw.rect(screen, (180, 180, 200), panel_rect, 2)
 
                     # 标题
                     title = font_score.render("得分榜", True, (60, 60, 60))

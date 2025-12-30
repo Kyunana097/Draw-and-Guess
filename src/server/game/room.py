@@ -1,6 +1,9 @@
 import random
 import time
+import logging
 from typing import Dict, List, Optional, Tuple
+
+logger = logging.getLogger(__name__)
 
 
 class GameRoom:
@@ -119,16 +122,23 @@ class GameRoom:
             True 表示房间状态发生了变化（需要广播事件/状态）。
         """
         if self.status == "playing":
-            if self.get_time_left() <= 0:
+            time_left = self.get_time_left()
+            if time_left <= 0:
+                logger.info(f"[Room {self.room_id}] Playing -> Resting (time up)")
                 self.start_rest()
                 return True
         elif self.status == "resting":
-            if self.get_time_left() <= 0:
+            time_left = self.get_time_left()
+            if time_left <= 0:
+                logger.info(f"[Room {self.room_id}] Resting -> next_round()")
                 # 休息结束：进入下一回合或结束游戏
                 ok = self.next_round()
                 if ok:
                     # next_round 成功，进入 playing 状态
                     self.status = "playing"
+                    logger.info(f"[Room {self.room_id}] -> Playing (round {self.round_number})")
+                else:
+                    logger.info(f"[Room {self.room_id}] -> Ended (next_round failed)")
                 # 无论成功与否（游戏结束时 ok=False），都表示状态变化
                 return True
         return False
