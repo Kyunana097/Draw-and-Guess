@@ -12,14 +12,21 @@ class GameRoom:
         self.room_id = room_id
         self.players: Dict[str, Dict[str, any]] = {}  # player_id -> {name, score, is_drawer}
         self.owner_id: Optional[str] = None
-        self.status = "waiting"  # waiting, playing, ended
+        # waiting: 未开始/大厅
+        # playing: 正在绘画回合
+        # resting: 回合间休息
+        # ended: 游戏结束
+        self.status = "waiting"  # waiting, playing, resting, ended
         self.current_word: Optional[str] = None
         self.drawer_id: Optional[str] = None
         self.round_number = 0
         self.max_rounds = 5
         self.round_start_time = 0
         self.round_duration = 60  # seconds
-        self.rest_time = 10  # 轮与轮之间建议休息时间（秒），目前仅作为配置广播
+        self.rest_time = 10  # 轮与轮之间休息时间（秒）
+        self.rest_start_time = 0
+        # 设置：绘画者退出时是否立刻终止本轮进入休息
+        self.end_round_on_drawer_leave = True
         self.drawer_order: List[str] = []  # 随机生成的绘画顺序（player_id列表）
         self.current_drawer_index = 0  # 当前绘者在顺序中的索引
 
@@ -55,7 +62,75 @@ class GameRoom:
             if self.drawer_id == player_id:
                 self.drawer_id = None
                 if self.status == "playing":
-                    self.next_round()
+                    if self.end_round_on_drawer_leave:
+                        self.start_rest()
+                    else:
+                        self.next_round()
+
+            if not self.players:
+                # 房间空了，重置为等待状态
+                self.status = "waiting"
+                self.current_word = None
+                self.drawer_id = None
+                self.round_number = 0
+                self.drawer_order = []
+                self.current_drawer_index = 0
+                self.round_start_time = 0
+                self.rest_start_time = 0
+
+    def get_time_left(self) -> int:
+        """返回当前阶段剩余时间（秒）。
+
+        - playing: round_duration 倒计时
+        - resting: rest_time 倒计时
+        - 其他: 0
+        """
+        now = time.time()
+        if self.status == "playing" and self.round_start_time:
+            try:
+                elapsed = max(0.0, now - float(self.round_start_time))
+            except Exception:
+                elapsed = 0.0
+            return max(0, int(self.round_duration - elapsed))
+        if self.status == "resting" and self.rest_start_time:
+            try:
+                elapsed = max(0.0, now - float(self.rest_start_time))
+            except Exception:
+                elapsed = 0.0
+            return max(0, int(self.rest_time - elapsed))
+        return 0
+
+    def start_rest(self) -> None:
+        """进入回合间休息阶段。"""
+        self.status = "resting"
+        self.rest_start_time = time.time()
+        # 清空本回合数据，避免休息阶段泄露/误用
+        self.current_word = None
+        self.round_start_time = 0
+        # 休息阶段不指定绘者，避免客户端继续显示词语
+        self.drawer_id = None
+        for p in self.players.values():
+            p["is_drawer"] = False
+
+    def tick(self) -> bool:
+        """服务器每秒调用一次的状态推进。
+
+        Returns:
+            True 表示房间状态发生了变化（需要广播事件/状态）。
+        """
+        if self.status == "playing":
+            if self.get_time_left() <= 0:
+                self.start_rest()
+                return True
+        elif self.status == "resting":
+            if self.get_time_left() <= 0:
+                # 休息结束：进入下一回合或结束游戏
+                ok = self.next_round()
+                if not ok:
+                    return True
+                self.status = "playing"
+                return True
+        return False
 
     def get_public_state(self, for_drawer: bool = False) -> dict:
         """获取房间的公开状态（用于广播给所有玩家）
@@ -63,20 +138,7 @@ class GameRoom:
         Args:
             for_drawer: 如果为True，包含当前词语；否则隐藏词语（只有绘者看得到）
         """
-        # 根据回合开始时间与持续时间计算剩余时间，保证所有玩家看到一致的倒计时
-        if self.status == "playing" and self.round_start_time:
-            try:
-                elapsed = max(0.0, time.time() - float(self.round_start_time))
-            except Exception:
-                elapsed = 0.0
-        else:
-            elapsed = 0.0
-        time_left = 0
-        try:
-            if self.status == "playing":
-                time_left = max(0, int(self.round_duration - elapsed))
-        except Exception:
-            time_left = 0
+        time_left = self.get_time_left()
 
         return {
             "room_id": self.room_id,
@@ -89,6 +151,7 @@ class GameRoom:
             "round_duration": self.round_duration,
             "rest_time": self.rest_time,
             "time_left": time_left,
+            "end_round_on_drawer_leave": bool(self.end_round_on_drawer_leave),
             "current_word": self.current_word if (self.status == "playing" and for_drawer) else None,
             "drawer_order": self.drawer_order,  # 绘画顺序列表
             "current_drawer_index": self.current_drawer_index,  # 当前轮次索引
@@ -122,11 +185,15 @@ class GameRoom:
 
         self.round_number += 1
 
-        # 从预生成的顺序中获取当前绘者
-        if self.current_drawer_index < len(self.drawer_order):
-            self.drawer_id = self.drawer_order[self.current_drawer_index]
+        # 从预生成的顺序中获取当前绘者；若该玩家已离开，则跳过
+        self.drawer_id = None
+        while self.current_drawer_index < len(self.drawer_order):
+            candidate = self.drawer_order[self.current_drawer_index]
             self.current_drawer_index += 1
-        else:
+            if candidate in self.players:
+                self.drawer_id = candidate
+                break
+        if not self.drawer_id:
             self.end_game()
             return False
 
@@ -138,6 +205,9 @@ class GameRoom:
         self.current_word = random.choice(words)
         # 新一轮开始时刷新回合开始时间
         self.round_start_time = time.time()
+
+        # 进入新回合时，清空休息计时
+        self.rest_start_time = 0
 
         return True
 

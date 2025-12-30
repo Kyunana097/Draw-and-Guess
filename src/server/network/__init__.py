@@ -172,7 +172,38 @@ class NetworkServer:
 		while self._running.is_set():
 			try:
 				for rid, room in list(self.rooms.items()):
-					if room.status == "playing":
+					# 推进房间状态（playing->resting->next round）
+					changed = False
+					try:
+						changed = bool(room.tick())
+					except Exception:
+						changed = False
+
+					if room.status in ("playing", "resting"):
+						# 每秒广播一次，保证倒计时平滑
+						self.broadcast_room_state(rid)
+
+					# 若刚从休息推进到新回合，发送 NEXT_ROUND 事件（让客户端清空画布等）
+					if changed and room.status == "playing":
+						try:
+							players = room.players or {}
+							drawer_name = None
+							if room.drawer_id and room.drawer_id in players:
+								drawer_name = players[room.drawer_id].get("name")
+						except Exception:
+							drawer_name = None
+						self.broadcast_room(rid, Message("event", {
+							"type": MSG_NEXT_ROUND,
+							"ok": True,
+							"drawer_id": room.drawer_id,
+							"drawer_name": drawer_name,
+							"round_number": room.round_number,
+							"round": room.round_number,
+							"max_rounds": room.max_rounds,
+						}))
+
+					# 若回合结束后房间进入 ended，则广播一次最终状态
+					if changed and room.status == "ended":
 						self.broadcast_room_state(rid)
 			except Exception:
 				traceback.print_exc()
@@ -262,16 +293,36 @@ class NetworkServer:
 						max_rounds = data.get("max_rounds")
 						round_time = data.get("round_time")
 						rest_time = data.get("rest_time")
-						if isinstance(max_rounds, int) and max_rounds > 0:
-							room.max_rounds = max_rounds
-						if isinstance(round_time, int) and round_time > 0:
-							# 模块化服务器使用 round_duration
-							room.round_duration = round_time
-						if isinstance(rest_time, int) and rest_time >= 0:
-							room.rest_time = rest_time
+						end_on_leave = data.get("end_round_on_drawer_leave")
+						# 兼容字符串和整数类型
+						if max_rounds is not None:
+							try:
+								val = int(max_rounds)
+								if val > 0:
+									room.max_rounds = val
+							except (ValueError, TypeError):
+								pass
+						if round_time is not None:
+							try:
+								val = int(round_time)
+								if val > 0:
+									room.round_duration = val
+							except (ValueError, TypeError):
+								pass
+						if rest_time is not None:
+							try:
+								val = int(rest_time)
+								if val >= 0:
+									room.rest_time = val
+							except (ValueError, TypeError):
+								pass
+						if isinstance(end_on_leave, bool):
+							room.end_round_on_drawer_leave = end_on_leave
+						logger.info(f"游戏配置更新: max_rounds={room.max_rounds}, round_duration={room.round_duration}, rest_time={room.rest_time}")
 						self._send(sess, Message("ack", {"ok": True, "event": MSG_SET_GAME_CONFIG}))
 						self.broadcast_room_state(sess.room_id)
-					except Exception:
+					except Exception as e:
+						logger.error(f"设置游戏配置出错: {e}")
 						self._send(sess, Message("error", {"msg": "Invalid config"}))
 				else:
 					self._send(sess, Message("error", {"msg": "Permission denied"}))
@@ -400,10 +451,41 @@ class NetworkServer:
 		elif t == MSG_CHAT:
 			# 聊天
 			if sess.room_id:
+				room = self.rooms.get(sess.room_id)
+				text = str(data.get("text") or "")
+				masked_text = text
+
+				# 若在绘画回合中有人猜中答案：
+				# 1) 仍然广播聊天，但将答案替换为等长 '*'
+				# 2) 计分
+				# 3) 发送 guess_correct 事件（同样不泄露答案，word 用 '*' 代替）
+				try:
+					if room and room.status == "playing" and room.current_word and sess.player_id:
+						if sess.player_id != room.drawer_id:
+							guess = text.strip()
+							if guess and guess == room.current_word:
+								# 聊天内容改为与答案等长的 '*'
+								masked_text = "*" * len(room.current_word)
+								ok, score = room.submit_guess(sess.player_id, room.current_word)
+								if ok:
+									# 猜对后立刻进入休息阶段（服务端权威）
+									room.start_rest()
+									# 广播房间状态（分数变化 + 进入休息 + 休息倒计时）
+									self.broadcast_room_state(sess.room_id)
+									self.broadcast_room(sess.room_id, Message("event", {
+										"type": "guess_correct",
+										"player_id": sess.player_id,
+										"player_name": sess.player_name,
+										"word": "*" * len(room.current_word),
+										"score": score,
+									}))
+				except Exception:
+					pass
+
 				payload = {
 					"by": sess.player_id,
 					"by_name": sess.player_name,
-					"text": str(data.get("text") or ""),
+					"text": masked_text,
 				}
 				self.broadcast_room(sess.room_id, Message("chat", payload))
 

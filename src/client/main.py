@@ -2174,7 +2174,9 @@ def main() -> None:
                     players = current_room.get("players", {})
                     start_y = 150
                     idx = 0
-                    for pid, pdata in players.items():
+                    # 积分榜始终在前：按分数降序显示
+                    sorted_players = sorted(players.items(), key=lambda x: x[1].get("score", 0), reverse=True)
+                    for pid, pdata in sorted_players:
                         name = pdata.get("name", "Unknown")
                         score = pdata.get("score", 0)
                         txt = font_p.render(f"{name} - {score}分", True, text_color)
